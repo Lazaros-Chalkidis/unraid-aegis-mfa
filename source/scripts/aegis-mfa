@@ -1,0 +1,125 @@
+#!/bin/bash
+# Aegis MFA CLI. Recovery and maintenance from SSH or the local console.
+#   aegis-mfa disable            turn MFA off and remove the login patches
+#   aegis-mfa enable             turn MFA on (re-applies patches, keeps settings)
+#   aegis-mfa status             show patch and config state
+#   aegis-mfa reconcile          force a patch reconcile now (what boot/cron do)
+#   aegis-mfa enforce [now|Nh]   end the dry-run now, or (re)start one of N hours
+#   aegis-mfa preflight          readiness report before enabling, live files never touched
+#   aegis-mfa capture [version]  record vanilla checksums as tested, QA step on a clean install
+PHP=/usr/bin/php
+INC=/usr/local/emhttp/plugins/aegis.mfa/include
+case "$1" in
+  disable)
+    $PHP -r "require '$INC/AegisMfaAdmin.php'; require '$INC/AegisMfaInstall.php';
+      aegis_mfa_set_enabled(false); print_r(aegis_mfa_reconcile_patches());"
+    echo "MFA disabled. Password-only login is active."
+    ;;
+  enable)
+    $PHP -r "require '$INC/AegisMfaAdmin.php'; require '$INC/AegisMfaInstall.php';
+      aegis_mfa_set_enabled(true);
+      \$s = aegis_mfa_sync_users();
+      print_r(aegis_mfa_reconcile_patches());
+      echo 'users synced, added: ' . count(\$s['added']) . PHP_EOL;"
+    ;;
+  status)
+    $PHP -r "require '$INC/AegisMfaInstall.php';
+      echo 'enabled: ' . (aegis_mfa_enabled() ? 'yes' : 'no') . PHP_EOL;
+      \$ea = (int)aegis_mfa_config()['enforce_after'];
+      echo 'enforcing: ' . (aegis_mfa_enforcing()
+          ? 'yes'
+          : 'no (dry-run until ' . date('Y-m-d H:i', \$ea) . ')') . PHP_EOL;
+      print_r(aegis_mfa_patch_state());
+      \$sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
+      \$users = array_keys(\$sec['users'] ?? []);
+      if (!\$users) {
+          echo 'users: none registered. Run aegis-mfa enable or use Sync users' . PHP_EOL;
+          echo '       in Settings > Aegis MFA. Until then everyone logs in' . PHP_EOL;
+          echo '       with the password alone.' . PHP_EOL;
+      } else {
+          foreach (\$users as \$u) {
+              echo '  user ' . \$u . ': ' . aegis_mfa_user_status(\$u) . PHP_EOL;
+          }
+      }"
+    ;;
+  reconcile)
+    $PHP -r "require '$INC/AegisMfaInstall.php'; print_r(aegis_mfa_reconcile_patches());"
+    ;;
+  users)
+    $PHP -r "require '$INC/AegisMfaInstall.php';
+      \$pw = []; @exec('/usr/bin/getent passwd 2>/dev/null', \$pw);
+      \$sh = []; @exec('/usr/bin/getent shadow 2>/dev/null', \$sh);
+      echo 'getent passwd lines: ' . count(\$pw)
+         . ', shadow lines: ' . count(\$sh) . PHP_EOL . PHP_EOL;
+      \$hash = [];
+      foreach (\$sh as \$l) {
+          \$f = explode(':', \$l);
+          if (count(\$f) >= 2) \$hash[\$f[0]] = \$f[1];
+      }
+      foreach (\$pw as \$l) {
+          \$f = explode(':', \$l);
+          if (count(\$f) < 3) continue;
+          \$n = \$f[0]; \$uid = (int)\$f[2];
+          \$h  = \$hash[\$n] ?? null;
+          if (\$h === null)          \$hc = 'no shadow entry';
+          elseif (\$h === '')        \$hc = 'empty hash';
+          elseif (\$h[0] === '*' || \$h[0] === '!') \$hc = 'locked (' . \$h[0] . ')';
+          else                       \$hc = 'hash ' . substr(\$h, 0, 3) . '...';
+          if (\$n !== 'root' && \$uid < 1000)  \$v = 'skip: uid below 1000';
+          elseif (\$h === null || \$h === '' || \$h[0] === '*' || \$h[0] === '!') \$v = 'skip: no usable hash';
+          else                                  \$v = 'LISTED';
+          printf('  %-18s uid %-6d %-20s -> %s' . PHP_EOL, \$n, \$uid, \$hc, \$v);
+      }
+      echo PHP_EOL . 'LISTED accounts are what Sync users sees. If an account you'
+         . PHP_EOL . 'expect is skipped, the reason column says which rule dropped it.'
+         . PHP_EOL;"
+    ;;
+  enforce)
+    case "${2:-now}" in
+      now)
+        $PHP -r "require '$INC/AegisMfaAdmin.php';
+          aegis_mfa_enforce_now(time() - 1);
+          echo 'Enforcing now. Enrolled users will see the 2FA challenge on their next login.' . PHP_EOL;"
+        ;;
+      *[0-9]h|*[0-9])
+        H="${2%h}"
+        $PHP -r "require '$INC/AegisMfaAdmin.php';
+          \$h = (int)'$H';
+          aegis_mfa_start_dry_run(\$h);
+          echo 'Dry run for ' . \$h . 'h. MFA is enabled but enrolled users keep signing in' . PHP_EOL;
+          echo 'with the password alone until ' . date('Y-m-d H:i', (int)aegis_mfa_config(true)['enforce_after']) . '.' . PHP_EOL;"
+        ;;
+      *)
+        echo "usage: aegis-mfa enforce [now|<hours>h]"; exit 1 ;;
+    esac
+    ;;
+  preflight)
+    $PHP -r "require '$INC/AegisMfaInstall.php';
+      \$r = aegis_mfa_preflight();
+      foreach (\$r['checks'] as \$c) {
+          printf('  %-26s %s  %s' . PHP_EOL, \$c['name'], \$c['ok'] ? 'PASS' : 'FAIL', \$c['detail']);
+      }
+      echo PHP_EOL . (\$r['ok']
+          ? 'PREFLIGHT PASS: this system looks safe to enable MFA on.'
+          : 'PREFLIGHT FAIL: do NOT enable MFA. Fix the FAIL lines first.') . PHP_EOL;
+      exit(\$r['ok'] ? 0 : 1);"
+    ;;
+  capture)
+    VER="${2:-$(sed -n 's/^version="\(.*\)"/\1/p' /etc/unraid-version 2>/dev/null)}"
+    case "$VER" in
+      ""|*[!0-9A-Za-z._-]*) echo "usage: aegis-mfa capture [unraid-version]"; exit 1 ;;
+    esac
+    $PHP -r "require '$INC/AegisMfaInstall.php';
+      \$r = aegis_mfa_capture_compat('$VER');
+      if (\$r['ok'] ?? false) {
+          echo 'captured vanilla checksums for $VER' . PHP_EOL;
+          print_r(\$r['shas']);
+      } else {
+          echo 'refused: ' . (\$r['reason'] ?? 'unknown')
+             . ' (both login files must be unpatched vanilla; run aegis-mfa disable first)' . PHP_EOL;
+          exit(1);
+      }"
+    ;;
+  *)
+    echo "usage: aegis-mfa {disable|enable|status|users|enforce [now|Nh]|reconcile|preflight|capture [version]}"; exit 1 ;;
+esac

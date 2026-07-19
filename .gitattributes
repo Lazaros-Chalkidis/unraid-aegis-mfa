@@ -1,2 +1,6 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# The plugin runs on Linux. A CRLF checkout breaks shebangs and cron entries,
+# so every text file is stored and checked out with LF regardless of platform.
+* text=auto eol=lf
+
+*.png binary
+*.txz binary

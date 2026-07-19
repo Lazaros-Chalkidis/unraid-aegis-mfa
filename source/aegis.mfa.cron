@@ -1,0 +1,3 @@
+# Aegis MFA - patch consistency check and lockout pruning.
+# Second, independent re-apply mechanism alongside the boot event hook.
+*/10 * * * * /usr/local/emhttp/plugins/aegis.mfa/scripts/aegis-mfa-cron &>/dev/null

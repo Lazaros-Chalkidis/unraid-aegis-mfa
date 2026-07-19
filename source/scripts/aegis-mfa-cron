@@ -1,0 +1,14 @@
+#!/bin/bash
+# Aegis MFA cron (every 10 min): consistency check + lockout pruning.
+# Second, independent re-apply mechanism alongside the boot hook.
+[ -x /usr/bin/php ] || exit 0
+/usr/bin/php -r 'require "/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaInstall.php";
+$before = aegis_mfa_patch_state();
+$r = aegis_mfa_reconcile_patches();
+if (aegis_mfa_enabled()) aegis_mfa_sync_users();
+aegis_mfa_prune_lockouts();
+aegis_mfa_notify_patch_state();
+if ($before["state"] !== aegis_mfa_patch_state()["state"]) {
+    @syslog(LOG_WARNING, "aegis-mfa cron changed patch state: " . json_encode($r));
+}' 2>/dev/null
+exit 0

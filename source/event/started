@@ -1,0 +1,10 @@
+#!/bin/bash
+# Aegis MFA boot hook: re-apply (or remove) the login patches after emhttpd
+# has settled. Runs the same reconcile the cron uses. Fail-open by design.
+[ -x /usr/bin/php ] || exit 0
+/usr/bin/php -r 'require "/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaInstall.php";
+$r = aegis_mfa_reconcile_patches();
+if (aegis_mfa_enabled()) aegis_mfa_sync_users();
+aegis_mfa_notify_patch_state();
+@syslog(LOG_INFO, "aegis-mfa boot reconcile: " . json_encode($r));' 2>/dev/null
+exit 0

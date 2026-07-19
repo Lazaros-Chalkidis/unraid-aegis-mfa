@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Plugin>
+  <Name>Aegis MFA</Name>
+  <Overview><![CDATA[Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app. Per user, with backup codes, a trusted LAN bypass, lockout protection, and a 24-hour dry-run before anything is enforced. Fail-open by design: a fault can never lock you out.]]></Overview>
+  <PluginURL>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/aegis.mfa.plg</PluginURL>
+  <PluginAuthor>Lazaros Chalkidis</PluginAuthor>
+  <Support>https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa/issues</Support>
+  <Project>https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa</Project>
+  <ReadMe>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/README.md</ReadMe>
+  <Category>Tools:Utilities Tools:System Security:</Category>
+  <MinVer>7.3.1</MinVer>
+  <Icon>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/aegismfaplugin.svg</Icon>
+  <License>GPL v3</License>
+  <Screenshot>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/screenshots/settings.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/screenshots/setup1.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/screenshots/setup2.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/screenshots/setup3.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/screenshots/setup4.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/screenshots/setup5.png</Screenshot>
+</Plugin>

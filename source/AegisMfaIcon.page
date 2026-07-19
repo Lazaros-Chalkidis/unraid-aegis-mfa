@@ -1,0 +1,29 @@
+Menu="Buttons:0"
+Title="Aegis MFA"
+Icon="shield"
+---
+<?php
+/*
+ * Aegis MFA for Unraid - global icon class
+ * Copyright (C) 2026 Lazaros Chalkidis
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Buttons pages load on every webGUI page. The icon-aegismfa class lets
+ * the Plugins page draw the keyhole shield, its icon attribute takes
+ * only a file or a class.
+ */
+?>
+<style>
+.icon-aegismfa{
+  display:inline-block;width:32px;height:32px;vertical-align:middle;
+  background-color:currentColor;
+  -webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 385 421'%3E%3Cg transform='translate(0,421) scale(0.1,-0.1)'%3E%3Cpath d='M963 3996 l-963 -211 0 -845 c0 -936 1 -953 61 -1145 120 -381 447 -804 904 -1170 339 -272 892 -617 990 -618 12 0 279 169 550 348 660 437 1119 955 1273 1437 68 213 72 272 72 1195 l0 798 -882 193 c-486 106 -919 201 -963 211 l-80 17 -962 -210z m1070 -1241 c364 -95 475 -525 204 -788 l-70 -69 27 -381 c15 -210 29 -408 33 -439 l6 -58 -308 0 -308 0 6 58 c4 31 18 229 33 439 l27 381 -70 69 c-343 333 -37 907 420 788z'/%3E%3C/g%3E%3C/svg%3E");
+  -webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain;
+  mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 385 421'%3E%3Cg transform='translate(0,421) scale(0.1,-0.1)'%3E%3Cpath d='M963 3996 l-963 -211 0 -845 c0 -936 1 -953 61 -1145 120 -381 447 -804 904 -1170 339 -272 892 -617 990 -618 12 0 279 169 550 348 660 437 1119 955 1273 1437 68 213 72 272 72 1195 l0 798 -882 193 c-486 106 -919 201 -963 211 l-80 17 -962 -210z m1070 -1241 c364 -95 475 -525 204 -788 l-70 -69 27 -381 c15 -210 29 -408 33 -439 l6 -58 -308 0 -308 0 6 58 c4 31 18 229 33 439 l27 381 -70 69 c-343 333 -37 907 420 788z'/%3E%3C/g%3E%3C/svg%3E");
+  mask-repeat:no-repeat;mask-position:center;mask-size:contain;
+}
+</style>

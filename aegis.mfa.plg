@@ -1,0 +1,195 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+ <!ENTITY name      "aegis.mfa">
+ <!ENTITY author    "Lazaros Chalkidis">
+ <!ENTITY version   "2026.07.19">
+ <!ENTITY branch    "main">
+ <!ENTITY gitURL    "https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa">
+ <!ENTITY pluginURL "&gitURL;/releases/download/&version;/&name;-&version;.txz">
+ <!ENTITY selfURL   "https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/&branch;/&name;.plg">
+ <!ENTITY md5       "e91ededb7c0f2be8ccf454619f3d072c">
+ <!ENTITY launch    "Settings/AegisMfa">
+]>
+
+<PLUGIN name="&name;" Title="Aegis MFA" author="&author;" version="&version;"
+        pluginURL="&selfURL;" launch="&launch;"
+        icon="icon-aegismfa"
+        min="7.3.1"
+        support="https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa/issues">
+
+<DESCRIPTION>
+<![CDATA[
+Two-factor authentication for the Unraid webGUI. TOTP codes from any authenticator app, per user, with backup codes, trusted LAN bypass, and lockout protection. Fail-open by design: a fault can never lock you out.
+]]>
+</DESCRIPTION>
+
+<CHANGES>
+<![CDATA[
+
+# Aegis MFA
+
+## Version 2026.07.19
+
+### First release
+- TOTP two-factor authentication for the Unraid webGUI, on top of the existing password login
+- Any authenticator app works: Google Authenticator, Authy, Bitwarden, whatever you already use
+- Per user: every account enrols with its own secret and its own backup codes
+- Setup wizard: scan a QR, confirm a code, save ten backup codes and type one back to finish
+- The QR is generated on the server, the secret never leaves the machine
+- Ten single-use backup codes, hashed on disk, with a remaining count in the settings
+- Trusted LAN: no code prompt from networks you list, the password is still required. Your own address is shown ready to add
+- Grace period: a new user gets a set number of days to enrol before setup becomes mandatory
+- Dry-run: for the first 24 hours nothing is blocked, you see the prompts and failures are only logged, then you enforce when ready
+- Lockout: repeated wrong codes lock the source IP out. Counters live in RAM, so brute force never wears the flash drive
+- A code that was already used is refused, even inside its own 30-second window
+- A failed code shows the server's own time, the usual culprit when codes suddenly stop matching
+- Per-user admin actions on the settings page: one-time setup link, fresh backup codes, reset
+- Fail-open by design: whatever breaks, corrupt config, a missing file, an Unraid update, the result is password-only login, never a locked door
+- The two Unraid login files are checked before they are touched, an unrecognised layout is refused instead of guessed at
+- Self-healing: a boot hook and a ten-minute cron re-apply the login patches if an Unraid update removes them
+- An Unraid notification fires when MFA is on but the patches are missing, and once more when protection returns
+- Ways back in: backup codes, `aegis-mfa disable` over SSH, a `DISABLE.flag` file on the flash, or `recover.sh` on the flash, pure bash, works even with PHP broken
+- CLI: `aegis-mfa` covers status, enable, disable, enforce and a preflight report that rehearses the patches before you enable anything
+- Every success and failure lands in the syslog with the user and the source IP
+- The challenge and the wizard match the Unraid login card, the settings follow the Aegis styling, all four webGUI themes supported
+- A notice warns when your Unraid release has not been tested with the plugin yet
+- Needs Unraid 7.3.1 or newer, enforced at install
+]]>
+</CHANGES>
+
+<FILE Run="/bin/bash">
+<INLINE>
+UNRAID_VER=$(sed -n "s/^version=\"\(.*\)\"/\1/p" /etc/unraid-version 2>/dev/null)
+MIN_VER="7.3.1"
+if [ -z "$UNRAID_VER" ]; then
+    echo "Cannot read /etc/unraid-version. Installation aborted."
+    exit 1
+fi
+LOWEST=$(printf "%s\n%s\n" "$UNRAID_VER" "$MIN_VER" | sort -V | head -1)
+TOO_OLD=0
+if [ "$UNRAID_VER" != "$MIN_VER" ]; then
+    if [ "$LOWEST" != "$MIN_VER" ]; then
+        TOO_OLD=1
+    fi
+fi
+if [ "$TOO_OLD" = "1" ]; then
+    echo ""
+    echo "----------------------------------------------------"
+    echo " Aegis MFA requires Unraid ${MIN_VER} or newer."
+    echo " This server runs ${UNRAID_VER}."
+    echo ""
+    echo " Older releases ship different PHP and nginx internals,"
+    echo " and this plugin patches the login path. Installing on"
+    echo " an unverified base is not safe, so it is refused."
+    echo ""
+    echo " Installation aborted. Nothing was changed."
+    echo "----------------------------------------------------"
+    echo ""
+    exit 1
+fi
+</INLINE>
+</FILE>
+
+<FILE Name="/boot/config/plugins/&name;/&name;-&version;.txz" Run="upgradepkg --install-new">
+  <URL>&pluginURL;</URL>
+  <MD5>&md5;</MD5>
+</FILE>
+
+<FILE Run="/bin/bash">
+<INLINE>
+# Fix ownership and permissions
+chown -R root:root /usr/local/emhttp/plugins/&name;
+find /usr/local/emhttp/plugins/&name; -type d -exec chmod 755 {} \;
+find /usr/local/emhttp/plugins/&name; -type f -exec chmod 644 {} \;
+find /usr/local/emhttp/plugins/&name; -name "*.sh" -exec chmod 755 {} \;
+
+# no-extension files chmodded by name, emhttpd only runs an executable hook
+chmod 755 /usr/local/emhttp/plugins/&name;/event/started
+chmod 755 /usr/local/emhttp/plugins/&name;/scripts/aegis-mfa
+chmod 755 /usr/local/emhttp/plugins/&name;/scripts/aegis-mfa-cron
+
+# the CLI on PATH is how a locked-out admin gets back in: ssh, then aegis-mfa disable
+ln -sf /usr/local/emhttp/plugins/&name;/scripts/aegis-mfa /usr/local/sbin/aegis-mfa
+
+# second re-apply mechanism next to the boot hook. no dot in the filename, cron.d skips dotted files on some builds
+install -m 0644 /usr/local/emhttp/plugins/&name;/&name;.cron /etc/cron.d/aegis-mfa
+/etc/rc.d/rc.crond restart >/dev/null 2>/dev/null
+
+# first install only, an upgrade leaves the existing config exactly as it is. no merge step,
+# the PHP layer deep-merges defaults at read time. copied from the package, a heredoc is not valid XML here
+mkdir -p /boot/config/plugins/&name;
+if [ ! -f /boot/config/plugins/&name;/config.json ]; then
+    cp /usr/local/emhttp/plugins/&name;/config.default.json /boot/config/plugins/&name;/config.json
+fi
+
+# secrets.json is never written here, an upgrade must not touch a single byte of it
+
+# the pure-bash recovery script goes on the flash: reachable with the plugin folder gone,
+# working with PHP broken. overwritten every install to stay current
+cp -f /usr/local/emhttp/plugins/&name;/scripts/aegis-mfa-recover.sh \
+      /boot/config/plugins/&name;/recover.sh 2>/dev/null
+chmod 0755 /boot/config/plugins/&name;/recover.sh 2>/dev/null
+
+# reset opcache so the login path runs the upgraded files, not stale bytecode
+php -r "if (function_exists(\"opcache_reset\")) opcache_reset();" >/dev/null 2>/dev/null
+
+# fold the shipped baseline into the flash compat.json, the flash copy wins. runs before
+# the reconcile so the tested notice is right from the first look
+php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; aegis_mfa_merge_compat();" >/dev/null 2>/dev/null
+
+# bring the patches in line with the saved setting: no-op on first install, on an upgrade with MFA
+# on it re-points the hooks at this build. anything off removes the patches, never half-wired
+php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; \$r = aegis_mfa_reconcile_patches(); echo \"patch state: \" . (\$r[\"state\"] ?? \"unknown\") . PHP_EOL;" 2>/dev/null
+
+echo ""
+echo "----------------------------------------------------"
+echo " &name; (&branch; build) installed successfully."
+echo " Version : &version;"
+echo " Settings: Settings > Aegis MFA"
+echo ""
+echo " MFA is OFF until you enable it. Enabling starts a"
+echo " 24h dry-run so you can confirm it works before it"
+echo " is enforced."
+echo ""
+echo " Locked out? From SSH or the console:  aegis-mfa disable"
+echo "----------------------------------------------------"
+echo ""
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+# 1. Un-patch the two Unraid login files FIRST, while our code still exists.
+if [[ -f /usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php ]]; then
+    php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; \$r = aegis_mfa_uninstall(); echo \"login files restored: \" . (\$r[\"state\"] ?? \"unknown\") . PHP_EOL;" 2>/dev/null
+fi
+
+# 2. drop the CLI symlink and the cron entry
+rm -f /usr/local/sbin/aegis-mfa
+rm -f /etc/cron.d/aegis-mfa
+/etc/rc.d/rc.crond restart >/dev/null 2>/dev/null
+
+# 3. drop the in-RAM lockout counters
+rm -rf /var/local/&name;
+
+# 4. now the package and the plugin folder can go
+removepkg &name;-&version;
+rm -rf /usr/local/emhttp/plugins/&name;
+
+# 5. flash config last, it takes the secrets with it, a reinstall starts clean
+rm -rf /boot/config/plugins/&name;
+
+# clear opcache so the restored login files are the ones that run
+php -r "if (function_exists(\"opcache_reset\")) opcache_reset();" >/dev/null 2>/dev/null
+
+echo ""
+echo "----------------------------------------------------"
+echo " &name; has been removed."
+echo " The Unraid login files were restored to stock and"
+echo " password-only login is active again."
+echo "----------------------------------------------------"
+echo ""
+</INLINE>
+</FILE>
+
+</PLUGIN>

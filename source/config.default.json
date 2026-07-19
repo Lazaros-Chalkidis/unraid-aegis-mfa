@@ -1,0 +1,13 @@
+{
+    "version": 1,
+    "enabled": false,
+    "enforce_after": 0,
+    "trust_lan": [],
+    "trusted_proxies": [],
+    "lockout": {
+        "threshold": 5,
+        "window_seconds": 300,
+        "lock_seconds": 900
+    },
+    "grace_period_days": 7
+}
