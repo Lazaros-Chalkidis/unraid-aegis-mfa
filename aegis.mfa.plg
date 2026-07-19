@@ -7,7 +7,7 @@
  <!ENTITY gitURL    "https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa">
  <!ENTITY pluginURL "&gitURL;/releases/download/&version;/&name;-&version;.txz">
  <!ENTITY selfURL   "https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/&branch;/&name;.plg">
- <!ENTITY md5       "e91ededb7c0f2be8ccf454619f3d072c">
+ <!ENTITY md5       "7477518912189c7a249ade90e1d36daa">
  <!ENTITY launch    "Settings/AegisMfa">
 ]>
 
