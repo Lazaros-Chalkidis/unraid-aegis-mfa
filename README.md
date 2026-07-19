@@ -36,6 +36,19 @@ The whole design is built around one rule: a fault must never lock you out. Ever
 - Untested-release notice: The settings page warns when your Unraid release has not been tested with the plugin yet
 - Four ways back in: Backup codes, `aegis-mfa disable` over SSH, a `DISABLE.flag` file on the flash drive, or the pure-bash `recover.sh` next to it
 
+**GUI Widget Screenshot**
+
+![Gui](screenshots/setup1.png)
+
+![Gui](screenshots/setup2.png)
+
+![Gui](screenshots/setup3.png)
+
+![Gui](screenshots/setup4.png)
+
+![Gui](screenshots/setup5.png)
+
+
 ## How you get back in
 
 This is the part that matters, so it comes before everything else.
@@ -96,6 +109,10 @@ The dry-run exists so that a clock problem, a mistyped secret, or an unexpected 
 - Grace period: How many days a newly created user has to enrol before the setup screen becomes mandatory
 - Per user: New backup codes, reset a user's 2FA, or hand a pending user a one-time setup link
 - Sync users: Reconcile the enrolment list against Unraid's own users. Runs on its own at boot and every ten minutes
+
+**Settings Page**
+
+![Settings](screenshots/settings.png)
 
 ## Command line
 
