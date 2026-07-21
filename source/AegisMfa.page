@@ -65,13 +65,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
         case 'regen_codes':
             $amfaNewCodes = aegis_mfa_regenerate_backup_codes((string)($_POST['user'] ?? ''));
             $amfaNotice = $amfaNewCodes === null
-                ? 'User is not enrolled.' : 'New backup codes generated, shown once below.';
+                ? 'Account is not enrolled.' : 'New backup codes generated, shown once below.';
             if ($amfaNewCodes === null) $amfaNoticeKind = 'err';
             break;
 
         case 'reset_user':
             aegis_mfa_reset_user((string)($_POST['user'] ?? ''), true);
-            $amfaNotice = 'User reset to pending, they must re-enrol.';
+            $amfaNotice = 'Account reset to pending, it must enrol again.';
             break;
 
         case 'bypass':
@@ -204,7 +204,7 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
 ?>
 <div class="amfa-note dry">
   <b>Dry run - logins are not protected yet.</b>
-  MFA is enabled, but enrolled users still sign in with the password alone.
+  MFA is enabled, but enrolled accounts still sign in with the password alone.
   This trial window lets you confirm your authenticator works before anyone can
   be locked out. It ends on <?= $amfaEsc(date('Y-m-d H:i', $amfaSum['enforce_after'])) ?>
   (in about <?= $amfaEsc($amfaLeftTxt) ?>), after which the 2FA challenge is required.
@@ -232,7 +232,7 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
 
   <div class="amfa-sec" id="amfaSecUsers">
     <div class="amfa-sec-hd">
-      <span>User enrolment</span>
+      <span>Account enrolment</span>
       <span class="amfa-pill">Who is set up for 2FA</span>
       <span class="amfa-sec-arrow">&#9650;</span>
     </div>
@@ -242,9 +242,9 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
         <div class="amfa-r-label">Accounts</div>
         <div class="amfa-r-field">
           <button type="submit" name="amfa_action" value="sync_users" class="amfa-action-btn amfa-action-btn--reset">
-            <i class="fa fa-refresh" aria-hidden="true"></i> Sync users
+            <i class="fa fa-refresh" aria-hidden="true"></i> Sync accounts
           </button>
-          <span class="amfa-r-desc">Pull the current Unraid user list. New users get a grace window to enrol. Accounts appear here once they have a webGUI password set, the same rule the Unraid login itself applies, so password-less and system accounts are left out</span>
+          <span class="amfa-r-desc">Accounts appear here once they have a webGUI password set, the same rule the Unraid login itself applies, so password-less and system accounts are left out. On current Unraid that is normally just root. Press to re-read the list, a new account gets a grace window to enrol</span>
         </div>
       </div>
 
@@ -341,7 +341,7 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
           <button type="submit" name="amfa_action" value="save_grace" class="amfa-action-btn amfa-action-btn--apply">
             <i class="fa fa-check" aria-hidden="true"></i> Save
           </button>
-          <span class="amfa-r-desc">How many days a new user has to enrol before being locked to the setup screen</span>
+          <span class="amfa-r-desc">How many days a new account has to enrol before being locked to the setup screen</span>
         </div>
       </div>
     </div>

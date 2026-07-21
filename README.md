@@ -1,6 +1,6 @@
 # Aegis MFA for Unraid
 
-Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app. Per user, with backup codes, a trusted LAN bypass, and lockout protection.
+Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app. Backup codes, a trusted LAN bypass, and lockout protection. It covers every account the webGUI accepts, which on current Unraid is root.
 
 <p align="center">
   <img src="https://img.shields.io/github/v/release/Lazaros-Chalkidis/unraid-aegis-mfa?label=Latest%20Version&color=blue" style="margin: 4px;" />&nbsp;
@@ -20,16 +20,16 @@ The whole design is built around one rule: a fault must never lock you out. Ever
 ## Features
 
 - TOTP codes: Works with Google Authenticator, Authy, 1Password, Bitwarden, or any RFC 6238 app. No cloud, no push, no account
-- Per user: Every Unraid user enrols separately, with their own secret and their own backup codes
+- Per account: Every account that can log into the webGUI enrols separately, with its own secret and its own backup codes. On current Unraid that is normally just root, the only account the login accepts. The plugin does not hardcode root, it reads the account list the same way .login.php does, so it stays correct if that ever changes
 - Setup wizard: Scan a QR, confirm a code, save your backup codes. The QR is generated on the server, so the secret never leaves the machine
 - Backup codes: Ten single-use codes, shown once. Enrolment does not finish until you type one back, which proves you actually saved them
 - Trusted LAN: Skip the code prompt from networks you trust (IPv4 and IPv6 CIDR). The password is still required, and your browser's address is shown ready to add with one click
 - Lockout protection: Too many wrong codes locks the IP out for a while. Counters live in RAM, so a brute-force attempt never wears out your flash drive
 - Replay protection: A code that has already been used is refused even inside its own 30-second window
 - Dry-run: The first 24 hours after you enable it, the login shows the prompt with a skip link and a failed code is logged but not blocked. Confirm it works before it can ever stop you
-- Grace period: A newly created Unraid user is nudged at login, with a skip, for a configurable window before the setup screen becomes mandatory
+- Grace period: A newly created account is nudged at login, with a skip, for a configurable window before the setup screen becomes mandatory
 - Clock-skew help: A failed code shows the server's own time, which is the usual reason TOTP suddenly stops matching
-- Audit trail: Every success and every failure goes to the syslog with the user and the source IP
+- Audit trail: Every success and every failure goes to the syslog with the account and the source IP
 - Fail-open by design: Corrupt config, a missing file, an Unraid update, an uninstall gone wrong. Every one of them ends with MFA off and password-only login, never with a locked door
 - Self-healing: A boot hook and a ten-minute cron re-apply the login patches if an Unraid update removes them
 - Watchdog alert: An Unraid notification fires if MFA is on but the login patches are missing, and once more when protection returns
@@ -106,9 +106,9 @@ The dry-run exists so that a clock problem, a mistyped secret, or an unexpected 
 - Enable / Disable: The master switch. Disabling removes the login patches immediately
 - Enforce now: End the 24-hour dry-run early, once you have confirmed it works
 - Trusted LAN: Networks that skip the code prompt, one CIDR or IP per line, IPv4 and IPv6. The password is still required
-- Grace period: How many days a newly created user has to enrol before the setup screen becomes mandatory
-- Per user: New backup codes, reset a user's 2FA, or hand a pending user a one-time setup link
-- Sync users: Reconcile the enrolment list against Unraid's own users. Runs on its own at boot and every ten minutes
+- Grace period: How many days a newly created account has to enrol before the setup screen becomes mandatory
+- Per account: New backup codes, reset an account's 2FA, or hand a pending account a one-time setup link
+- Sync accounts: Reconcile the enrolment list against Unraid's own account list. Runs on its own at boot and every ten minutes
 
 **Settings Page**
 
@@ -118,12 +118,12 @@ The dry-run exists so that a clock problem, a mistyped secret, or an unexpected 
 
 The CLI is on the PATH as `aegis-mfa` and works over SSH or the local console:
 
-- `aegis-mfa status` - enabled and enforcing state, patch state, every user's MFA status
+- `aegis-mfa status` - enabled and enforcing state, patch state, every account's MFA status
 - `aegis-mfa enable` / `aegis-mfa disable` - the same switches as the settings page
 - `aegis-mfa enforce [now|Nh]` - end the dry-run now, or (re)start one of N hours
 - `aegis-mfa preflight` - readiness report before enabling: anchors, lint, a full rehearsal on copies. Live files are never touched
 - `aegis-mfa reconcile` - run the boot and cron consistency check right now
-- `aegis-mfa users` - every account with the exact rule that lists or skips it, for when someone is missing from Sync users
+- `aegis-mfa users` - every account with the exact rule that lists or skips it, for when something is missing from Sync accounts
 
 ## How it works
 
