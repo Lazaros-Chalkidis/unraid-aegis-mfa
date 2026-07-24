@@ -16,17 +16,17 @@
 ### First release
 - TOTP two-factor authentication for the Unraid webGUI, on top of the existing password login
 - Any authenticator app works: Google Authenticator, Authy, Bitwarden, whatever you already use
-- Per account: every account the webGUI accepts enrols with its own secret and its own backup codes. On current Unraid that is normally just root
+- Root only: root is the only account the Unraid webGUI accepts, and enrols with its own secret and its own backup codes
 - Setup wizard: scan a QR, confirm a code, save ten backup codes and type one back to finish
 - The QR is generated on the server, the secret never leaves the machine
 - Ten single-use backup codes, hashed on disk, with a remaining count in the settings
 - Trusted LAN: no code prompt from networks you list, the password is still required. Your own address is shown ready to add
-- Grace period: a new account gets a set number of days to enrol before setup becomes mandatory
+- Grace period: root gets a set number of days to enrol before setup becomes mandatory
 - Dry-run: for the first 24 hours nothing is blocked, you see the prompts and failures are only logged, then you enforce when ready
 - Lockout: repeated wrong codes lock the source IP out. Counters live in RAM, so brute force never wears the flash drive
 - A code that was already used is refused, even inside its own 30-second window
 - A failed code shows the server's own time, the usual culprit when codes suddenly stop matching
-- Per-account admin actions on the settings page: one-time setup link, fresh backup codes, reset
+- Admin actions on the settings page: one-time setup link, fresh backup codes, reset
 - Fail-open by design: whatever breaks, corrupt config, a missing file, an Unraid update, the result is password-only login, never a locked door
 - The two Unraid login files are checked before they are touched, an unrecognised layout is refused instead of guessed at
 - Self-healing: a boot hook and a ten-minute cron re-apply the login patches if an Unraid update removes them
