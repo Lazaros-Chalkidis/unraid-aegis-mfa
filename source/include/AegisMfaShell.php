@@ -158,7 +158,6 @@ h1 { font-size: 2.6rem; font-weight: 700; }
     letter-spacing: .2rem; text-transform: uppercase; text-decoration: none;
 }
 .amfa-foot a:hover { text-decoration: underline; }
-.amfa-user { font-size: 1.2rem; color: var(--amfa-dim); }
 .amfa-lockout {
     font-size: 1.2rem; color: var(--amfa-dim);
     border-bottom: 1px dashed var(--amfa-dim); cursor: help;

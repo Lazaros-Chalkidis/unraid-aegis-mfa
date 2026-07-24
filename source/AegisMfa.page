@@ -1,5 +1,5 @@
 Menu="Utilities"
-Title="Aegis MFA"
+Title="Aegis MFA Settings"
 Icon="<svg class='PanelIcon' viewBox='0 0 385 421' width='33' height='33' fill='currentColor' aria-hidden='true'><g transform='translate(0,421) scale(0.1,-0.1)'><path d='M963 3996 l-963 -211 0 -845 c0 -936 1 -953 61 -1145 120 -381 447 -804 904 -1170 339 -272 892 -617 990 -618 12 0 279 169 550 348 660 437 1119 955 1273 1437 68 213 72 272 72 1195 l0 798 -882 193 c-486 106 -919 201 -963 211 l-80 17 -962 -210z m1070 -1241 c364 -95 475 -525 204 -788 l-70 -69 27 -381 c15 -210 29 -408 33 -439 l6 -58 -308 0 -308 0 6 58 c4 31 18 229 33 439 l27 381 -70 69 c-343 333 -37 907 420 788z'/></g></svg>"
 ---
 <?php
@@ -96,9 +96,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
                             . 'in a terminal to see what the enumeration finds.';
                 $amfaNoticeKind = 'err';
             } else {
-                $amfaNotice = 'Synced. Accounts seen: ' . (int)($r['live'] ?? 0)
-                            . '. Added: ' . count($r['added'])
-                            . ', removed: ' . count($r['removed']) . '.';
+                if ($r['added']) {
+                    $amfaNotice = 'Synced. ' . implode(', ', $r['added'])
+                                . ' is now on the list, with a grace window to enrol.';
+                } elseif ($r['removed']) {
+                    $amfaNotice = 'Synced. ' . implode(', ', $r['removed'])
+                                . ' no longer has a webGUI password and came off the list.';
+                } else {
+                    $amfaNotice = 'Synced. root is already on the list, nothing changed.';
+                }
                 if (($r['skipped'] ?? '') === 'no_root_in_list') {
                     $amfaNotice .= ' Add-only run: root was missing from the snapshot, '
                                  . 'so nothing was removed.';
@@ -134,7 +140,7 @@ $amfaCssVer = $amfaVer;
 
 <div class="amfa-head<?= $amfaRootCls ?>">
   <div class="amfa-head-title">
-    <svg class="amfa-shield" viewBox="0 0 385 421" width="26" height="26" aria-hidden="true"><g transform="translate(0,421) scale(0.1,-0.1)" fill="currentColor"><path d="M963 3996 l-963 -211 0 -845 c0 -936 1 -953 61 -1145 120 -381 447 -804 904 -1170 339 -272 892 -617 990 -618 12 0 279 169 550 348 660 437 1119 955 1273 1437 68 213 72 272 72 1195 l0 798 -882 193 c-486 106 -919 201 -963 211 l-80 17 -962 -210z m1070 -1241 c364 -95 475 -525 204 -788 l-70 -69 27 -381 c15 -210 29 -408 33 -439 l6 -58 -308 0 -308 0 6 58 c4 31 18 229 33 439 l27 381 -70 69 c-343 333 -37 907 420 788z"/></g></svg>
+    <svg class="amfa-shield" viewBox="0 0 385 421" width="34" height="34" aria-hidden="true"><g transform="translate(0,421) scale(0.1,-0.1)" fill="currentColor"><path d="M963 3996 l-963 -211 0 -845 c0 -936 1 -953 61 -1145 120 -381 447 -804 904 -1170 339 -272 892 -617 990 -618 12 0 279 169 550 348 660 437 1119 955 1273 1437 68 213 72 272 72 1195 l0 798 -882 193 c-486 106 -919 201 -963 211 l-80 17 -962 -210z m1070 -1241 c364 -95 475 -525 204 -788 l-70 -69 27 -381 c15 -210 29 -408 33 -439 l6 -58 -308 0 -308 0 6 58 c4 31 18 229 33 439 l27 381 -70 69 c-343 333 -37 907 420 788z"/></g></svg>
     <div>
       <h2>Aegis MFA</h2>
       <p>Two-factor authentication for the Unraid webGUI</p>
@@ -204,8 +210,8 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
 ?>
 <div class="amfa-note dry">
   <b>Dry run - logins are not protected yet.</b>
-  MFA is enabled, but enrolled accounts still sign in with the password alone.
-  This trial window lets you confirm your authenticator works before anyone can
+  MFA is enabled, but root still signs in with the password alone.
+  This trial window lets you confirm your authenticator works before you can
   be locked out. It ends on <?= $amfaEsc(date('Y-m-d H:i', $amfaSum['enforce_after'])) ?>
   (in about <?= $amfaEsc($amfaLeftTxt) ?>), after which the 2FA challenge is required.
   <span class="amfa-inline">
@@ -238,22 +244,15 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
     </div>
     <div class="amfa-sec-bd">
 
-      <div class="amfa-r" style="border-bottom:none;">
-        <div class="amfa-r-label">Accounts</div>
-        <div class="amfa-r-field">
-          <button type="submit" name="amfa_action" value="sync_users" class="amfa-action-btn amfa-action-btn--reset">
-            <i class="fa fa-refresh" aria-hidden="true"></i> Sync accounts
-          </button>
-          <span class="amfa-r-desc">Accounts appear here once they have a webGUI password set, the same rule the Unraid login itself applies, so password-less and system accounts are left out. On current Unraid that is normally just root. Press to re-read the list, a new account gets a grace window to enrol</span>
-        </div>
-      </div>
-
-      <div style="padding:6px 16px 12px;">
+      <div style="padding:12px 16px;">
       <?php foreach ($amfaSum['users'] as $u): ?>
         <div class="amfa-user-row">
           <div class="amfa-av"><?= $amfaEsc(strtoupper(substr($u['name'], 0, 1))) ?></div>
           <div class="amfa-user-info">
-            <b><?= $amfaEsc($u['name']) ?></b>
+            <b><?= $amfaEsc($u['name']) ?></b><span class="amfa-badge <?= $amfaEsc($u['status']) ?>"><?=
+              $u['status'] === 'none' ? 'None - Not set up for MFA yet' : $amfaEsc(ucfirst($u['status']))
+            ?></span>
+            <?php if ($u['status'] !== 'none'): ?>
             <span<?= in_array($u['status'], ['locked'], true) ? ' class="warn"' : '' ?>>
             <?php if ($u['status'] === 'enrolled'): ?>
               <?= (int)$u['backup_remaining'] ?> backup codes left
@@ -261,12 +260,10 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
               Grace period ends <?= $amfaEsc(date('Y-m-d', (int)$u['grace_until'])) ?>
             <?php elseif ($u['status'] === 'locked'): ?>
               Grace expired, needs a setup link or reset
-            <?php else: ?>
-              Not required to use MFA
             <?php endif; ?>
             </span>
+            <?php endif; ?>
           </div>
-          <span class="amfa-badge <?= $amfaEsc($u['status']) ?>"><?= $amfaEsc(ucfirst($u['status'])) ?></span>
           <span class="amfa-user-btns">
           <?php if ($u['status'] === 'enrolled'): ?>
             <button type="submit" name="amfa_action" value="bypass" class="amfa-action-btn"
@@ -281,16 +278,21 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
               data-c-msg="Ten fresh single-use codes for <?= $amfaEsc($u['name']) ?>. The old codes stop working immediately.">
               <i class="fa fa-key" aria-hidden="true"></i> New codes
             </button>
+          <?php elseif ($u['status'] === 'locked' || $u['status'] === 'pending'): ?>
+            <button type="submit" name="amfa_action" value="bypass" class="amfa-action-btn"
+              data-user="<?= $amfaEsc($u['name']) ?>">
+              <i class="fa fa-link" aria-hidden="true"></i> Setup link
+            </button>
+          <?php endif; ?>
+            <button type="submit" name="amfa_action" value="sync_users" class="amfa-action-btn amfa-action-btn--reset">
+              <i class="fa fa-refresh" aria-hidden="true"></i> Sync accounts
+            </button>
+          <?php if ($u['status'] === 'enrolled'): ?>
             <button type="submit" name="amfa_action" value="reset_user" class="amfa-action-btn amfa-action-btn--reset"
               data-user="<?= $amfaEsc($u['name']) ?>" data-amfa-confirm data-c-danger data-c-icon="fa-undo"
               data-c-title="Reset 2FA for <?= $amfaEsc($u['name']) ?>?" data-c-ok="Reset 2FA"
               data-c-msg="Their secret and backup codes are removed and they must enrol again from scratch.">
               <i class="fa fa-undo" aria-hidden="true"></i> Reset
-            </button>
-          <?php elseif ($u['status'] === 'locked' || $u['status'] === 'pending'): ?>
-            <button type="submit" name="amfa_action" value="bypass" class="amfa-action-btn"
-              data-user="<?= $amfaEsc($u['name']) ?>">
-              <i class="fa fa-link" aria-hidden="true"></i> Setup link
             </button>
           <?php endif; ?>
           </span>
@@ -374,7 +376,7 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
 
 <div class="amfa-footer-row">
   <div class="amfa-footer-links">
-    <a href="https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa/issues" class="amfa-footer-link" target="_blank" rel="noopener">GitHub Issues</a>
+    <a href="https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa/issues" class="amfa-footer-link" target="_blank" rel="noopener">Support</a>
     <span class="amfa-footer-sep" aria-hidden="true"></span>
     <a href="#" id="amfaCreditsLink" class="amfa-footer-link">Credits</a>
   </div>
@@ -409,7 +411,7 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
           <img src="/plugins/aegis.mfa/images/avatar.png" alt="Lazaros Chalkidis" class="amfa-credits-avatar">
         </div>
         <div class="amfa-credits-name">Lazaros Chalkidis</div>
-        <div class="amfa-credits-role">Developer</div>
+        <div class="amfa-credits-role">Author</div>
       </div>
 
       <div class="amfa-credits-right">
@@ -423,7 +425,7 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
             <i class="fa fa-github"></i><span>GitHub Profile</span><i class="fa fa-external-link amfa-credits-link-ext"></i>
           </a>
           <a href="https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa/issues" target="_blank" rel="noopener" class="amfa-credits-link">
-            <i class="fa fa-exclamation-circle"></i><span>GitHub Issues</span><i class="fa fa-external-link amfa-credits-link-ext"></i>
+            <i class="fa fa-exclamation-circle"></i><span>Support</span><i class="fa fa-external-link amfa-credits-link-ext"></i>
           </a>
         </div>
       </div>

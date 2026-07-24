@@ -284,5 +284,4 @@ aegis_mfa_shell_open('Aegis MFA setup', $amfaWizCss);
         </div>
 <?php endif; ?>
 <?php
-aegis_mfa_shell_close('<span></span><span class="amfa-user">Signed in as '
-    . $amfaEsc($amfaUser) . '</span>');
+aegis_mfa_shell_close();

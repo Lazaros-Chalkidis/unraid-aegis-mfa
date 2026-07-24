@@ -115,13 +115,13 @@ if ($amfaStatus === 'pending' || $amfaStatus === 'locked') {
                     <span class="amfa-clock">Server time: <?= $amfaEsc($amfaTime) ?></span>
                 </p>
                 <?php endif; ?>
-                <p class="amfa-hint">You can also enter one of your backup codes (xxxxx-xxxxx).</p>
                 <?php if ($amfaDry): ?>
                 <p class="amfa-skip"><a href="/login?aegis_mfa_skip=1">Continue without a code (dry-run)</a></p>
                 <?php endif; ?>
             </div>
             <div class="amfa-shieldbox"><?= aegis_mfa_shell_shield() ?></div>
         </div>
+        <p class="amfa-hint">You can also enter one of your backup codes (xxxxx-xxxxx).</p>
 <?php
 }
 
@@ -135,5 +135,4 @@ $amfaLockedTip = 'From SSH or the local console run <code>aegis-mfa disable</cod
 
 aegis_mfa_shell_close('<a href="/logout">Sign out</a>'
     . '<span class="amfa-lockout" tabindex="0">Locked Out?'
-    . '<span class="amfa-lockout-tip" role="tooltip">' . $amfaLockedTip . '</span></span>'
-    . '<span class="amfa-user">Signed in as ' . $amfaEsc($amfaUser) . '</span>');
+    . '<span class="amfa-lockout-tip" role="tooltip">' . $amfaLockedTip . '</span></span>');

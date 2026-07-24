@@ -1,9 +1,15 @@
 
 # Aegis MFA
 
-## 2026.07.21
+## Version 2026.07.24
 
-Changed: support links now point to GitHub Issues, and the README wording was tightened
+### Fixed
+- Wording changes for clearer phrasing
+
+## Version 2026.07.21
+
+### Fixed
+- Support links now point to GitHub Issues, and the README wording was tightened
 
 ## Version 2026.07.19
 

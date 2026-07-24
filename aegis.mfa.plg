@@ -2,12 +2,12 @@
 <!DOCTYPE PLUGIN [
  <!ENTITY name      "aegis.mfa">
  <!ENTITY author    "Lazaros Chalkidis">
- <!ENTITY version   "2026.07.21">
+ <!ENTITY version   "2026.07.24">
  <!ENTITY branch    "main">
  <!ENTITY gitURL    "https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa">
  <!ENTITY pluginURL "&gitURL;/releases/download/&version;/&name;-&version;.txz">
  <!ENTITY selfURL   "https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/&branch;/&name;.plg">
- <!ENTITY md5       "fde0a727afa27562d5d83f504fbb22e5">
+ <!ENTITY md5       "44450a187a4056f615d1993d0253f108">
  <!ENTITY launch    "Settings/AegisMfa">
 ]>
 
@@ -28,9 +28,15 @@ Two-factor authentication for the Unraid webGUI. TOTP codes from any authenticat
 
 # Aegis MFA
 
-## 2026.07.21
+## Version 2026.07.24
 
-Changed: support links now point to GitHub Issues, and the README wording was tightened
+### Fixed
+- Wording changes for clearer phrasing
+
+## Version 2026.07.21
+
+### Fixed
+- Support links now point to GitHub Issues, and the README wording was tightened
 
 ## Version 2026.07.19
 
