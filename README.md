@@ -6,6 +6,7 @@ Two-factor authentication for the Unraid webGUI. After your password, enter a 6-
   <img src="https://img.shields.io/github/v/release/Lazaros-Chalkidis/unraid-aegis-mfa?label=Latest%20Version&color=blue" style="margin: 4px;" />&nbsp;
   <img src="https://img.shields.io/github/last-commit/Lazaros-Chalkidis/unraid-aegis-mfa?label=Last%20Update" style="margin: 4px;" />&nbsp;
   <img src="https://img.shields.io/github/issues/Lazaros-Chalkidis/unraid-aegis-mfa?label=Issues" style="margin: 4px;" />&nbsp;
+  <img src="https://img.shields.io/github/downloads/Lazaros-Chalkidis/unraid-aegis-mfa/total?label=Downloads&color=brightgreen" style="margin: 4px;" />&nbsp;
   <img src="https://img.shields.io/github/license/Lazaros-Chalkidis/unraid-aegis-mfa?label=License" style="margin: 4px;" />
 </p>
 
