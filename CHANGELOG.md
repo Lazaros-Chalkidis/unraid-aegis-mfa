@@ -1,9 +1,15 @@
 
 # Aegis MFA
 
+## Version 2026.07.25
+
+### Improvements
+- The shield icon is drawn as a thin outline with a filled keyhole, in the header, on the settings page, in the Plugins list and in the CA artwork, which stays blue
+- White and azure get darker overrides for the warning, locked, power, apply and link colours that were hard to read on light backgrounds
+
 ## Version 2026.07.24
 
-### Fixed
+### Improvements
 - Wording changes for clearer phrasing
 
 ## Version 2026.07.21

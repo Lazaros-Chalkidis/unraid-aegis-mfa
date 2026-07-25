@@ -71,6 +71,7 @@
   --amfa-ctrl-hover:     #aab0b8;
 
   --amfa-green:          #2e7d32;
+  --amfa-blue:           #1565c0;
 }
 
 .amfa-theme-azure {
@@ -279,6 +280,8 @@
 }
 .amfa-light .amfa-r-danger,
 .amfa-theme-azure .amfa-r-danger { color: #c62828; }
+.amfa-light .amfa-r-desc--warn,
+.amfa-theme-azure .amfa-r-desc--warn { color: #a06400; }
 
 .amfa-r-warn {
   font-size: 11px;
@@ -473,6 +476,7 @@
   background: rgba(76,175,80,.2) !important;
   border-color: rgba(76,175,80,.5) !important;
 }
+.amfa-light .amfa-action-btn--apply { color: var(--amfa-green) !important; }
 
 .amfa-action-btn--reset {
   background: rgba(244,125,66,.12) !important;
@@ -532,6 +536,8 @@
   text-decoration: none !important;
   outline: none;
 }
+.amfa-light .amfa-footer-link:hover,
+.amfa-light .amfa-footer-link:focus { color: #0d47a1; }
 
 .amfa-footer-sep {
   display: inline-block;
@@ -1062,6 +1068,7 @@
   color: #e05252 !important;
 }
 .amfa-power-btn.on:hover  { background: rgba(224,82,82,.2) !important; border-color: rgba(224,82,82,.6) !important; }
+.amfa-light .amfa-power-btn.on { color: #c62828 !important; }
 .amfa-power-btn.off {
   background: rgba(76,175,80,.12) !important;
   border: 1px solid rgba(76,175,80,.4) !important;
@@ -1183,6 +1190,7 @@
 .amfa-badge.pending  { background: rgba(244,125,66,.15); color: var(--amfa-accent); }
 .amfa-badge.locked   { background: rgba(224,82,82,.15);  color: #e05252; }
 .amfa-badge.none     { background: rgba(128,128,128,.15); color: var(--amfa-c-text-muted); }
+.amfa-light .amfa-badge.locked { color: #c62828; }
 
 /* per-user action buttons */
 .amfa-user-btns { display: inline-flex; gap: 6px; flex-wrap: wrap; }
