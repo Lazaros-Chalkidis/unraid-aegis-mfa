@@ -1,29 +1,91 @@
 <?php
-/*
- * Aegis MFA for Unraid - shared helpers
- * Copyright (C) 2026 Lazaros Chalkidis
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Design rule: helpers never throw. Every failure returns null/false
- * so the gate stays fail-open. All functions carry the aegis_mfa_
- * prefix, same collision reasoning as the TOTP module.
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
 
-// persistent state on flash: config, secrets. survives reboot
 function aegis_mfa_flash(): string {
     return defined('AEGIS_MFA_FLASH_DIR') ? AEGIS_MFA_FLASH_DIR : '/boot/config/plugins/aegis.mfa';
 }
 
-// ephemeral state in RAM: lockout counters. cleared on reboot by design, keeps brute force off the USB flash
 function aegis_mfa_state(): string {
     return defined('AEGIS_MFA_STATE_DIR') ? AEGIS_MFA_STATE_DIR : '/var/local/aegis.mfa';
 }
 
-// read under shared lock. array on success, null otherwise
+function aegis_mfa_var_ini(): array {
+    static $v = null;
+    if ($v === null) {
+        $path = defined('AEGIS_MFA_VAR_INI') ? AEGIS_MFA_VAR_INI : '/usr/local/emhttp/state/var.ini';
+        $v = @parse_ini_file($path) ?: [];
+    }
+    return $v;
+}
+
+// not from HTTP_HOST, the caller sets that and it lands in the user's authenticator app
+function aegis_mfa_server_name(): string {
+    $name = trim((string)(aegis_mfa_var_ini()['NAME'] ?? ''));
+    return $name !== '' ? $name : (gethostname() ?: 'Unraid');
+}
+
+// recorded, not guessed from uid or shell: only accounts that turn up here can use 2FA
+function aegis_mfa_seen_webgui(string $user): bool {
+    $sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
+    $u = $sec['users'][$user] ?? null;
+    if (!is_array($u)) return false;
+
+    // enrolling means going through the wizard behind a password login, so it counts on its own.
+    // without this an account enrolled before seen_at existed reads as having no webGUI access
+    return (int)($u['seen_at'] ?? 0) > 0 || ($u['status'] ?? '') === 'enrolled';
+}
+
+function aegis_mfa_mark_seen(string $user, ?int $now = null): bool {
+    if (!preg_match('/^[a-z_][a-z0-9._-]{0,31}$/i', $user)) return false;
+    if (aegis_mfa_seen_webgui($user)) return false;
+    $now = $now ?? time();
+    $wrote = false;
+    aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
+        function ($sec) use ($user, $now, &$wrote) {
+            if (!isset($sec['users']) || !is_array($sec['users'])) $sec['users'] = [];
+
+            // the account can turn up before the first sync, status is left for sync to fill in
+            if (!isset($sec['users'][$user]) || !is_array($sec['users'][$user])) {
+                $sec['users'][$user] = [];
+            }
+            if ((int)($sec['users'][$user]['seen_at'] ?? 0) > 0) return $sec;
+            $sec['users'][$user]['seen_at'] = $now;
+            $wrote = true;
+            return $sec;
+        });
+    return $wrote;
+}
+
+// dynamix.cfg only exists once Display settings are touched, and defaulting to black paints white on white
+function aegis_mfa_theme(): string {
+    $known = ['black', 'white', 'azure', 'gray'];
+
+    // inside an emhttp page $display is already the merged user + default config
+    $t = $GLOBALS['display']['theme'] ?? '';
+    if (is_string($t) && in_array($t, $known, true)) return $t;
+
+    $files = [
+        defined('AEGIS_MFA_DYNAMIX_CFG') ? AEGIS_MFA_DYNAMIX_CFG
+            : '/boot/config/plugins/dynamix/dynamix.cfg',
+        defined('AEGIS_MFA_DYNAMIX_DEFAULT') ? AEGIS_MFA_DYNAMIX_DEFAULT
+            : '/usr/local/emhttp/plugins/dynamix/default.cfg',
+    ];
+    foreach ($files as $f) {
+        $cfg = @parse_ini_file($f, true);
+        $v   = is_array($cfg) ? ($cfg['display']['theme'] ?? '') : '';
+        if (is_string($v) && in_array($v, $known, true)) return $v;
+    }
+    return 'white';
+}
+
+function aegis_mfa_theme_is_light(string $theme): bool {
+    return in_array($theme, ['white', 'azure'], true);
+}
+
 function aegis_mfa_read_json(string $path): ?array {
     if (!is_file($path)) return null;
     $fp = @fopen($path, 'r');
@@ -39,7 +101,7 @@ function aegis_mfa_read_json(string $path): ?array {
     return $data;
 }
 
-// exclusive read-modify-write, LOCK_EX on the same inode, so counter increments are never lost
+// read-modify-write under LOCK_EX on the same inode, so concurrent counter bumps are never lost
 function aegis_mfa_update_json(string $path, callable $fn, int $mode = 0600): bool {
     $dir = dirname($path);
     if (!is_dir($dir) && !@mkdir($dir, 0700, true)) return false;
@@ -61,16 +123,15 @@ function aegis_mfa_update_json(string $path, callable $fn, int $mode = 0600): bo
         flock($fp, LOCK_UN);
     }
     fclose($fp);
-    if ($ok) @chmod($path, $mode);   // best effort, no-op on FAT
+    if ($ok) @chmod($path, $mode);
     return $ok;
 }
 
-// overwrite with fixed content, same locking
 function aegis_mfa_write_json(string $path, array $data, int $mode = 0600): bool {
     return aegis_mfa_update_json($path, function ($old) use ($data) { return $data; }, $mode);
 }
 
-// config with defaults deep-merged, a partial or old config.json never leaves a key missing. one disk read per request
+// defaults deep-merged, so a partial or older config.json never leaves a key missing
 function aegis_mfa_config(bool $reload = false): array {
     static $cache = null;
     if ($cache !== null && !$reload) return $cache;
@@ -81,7 +142,8 @@ function aegis_mfa_config(bool $reload = false): array {
         'trust_lan'         => [],
         'trusted_proxies'   => [],
         'lockout'           => ['threshold' => 5, 'window_seconds' => 300, 'lock_seconds' => 900],
-        'grace_period_days' => 7,
+        'lockout_history'   => true,
+        'grace_period_days' => 2,
     ];
     $file = aegis_mfa_read_json(aegis_mfa_flash() . '/config.json');
     if (!is_array($file)) $file = [];
@@ -94,7 +156,7 @@ function aegis_mfa_config(bool $reload = false): array {
     return $cache = $cfg;
 }
 
-// USB rescue: a flag file on flash bypasses MFA entirely
+// USB rescue: a flag file on the flash bypasses MFA entirely
 function aegis_mfa_disabled_by_flag(): bool {
     return is_file(aegis_mfa_flash() . '/DISABLE.flag');
 }
@@ -104,12 +166,10 @@ function aegis_mfa_enabled(): bool {
     return !empty(aegis_mfa_config()['enabled']);
 }
 
-// dry-run window: before enforce_after, failures log but do not block
 function aegis_mfa_enforcing(?int $now = null): bool {
     return ($now ?? time()) >= (int)(aegis_mfa_config()['enforce_after'] ?? 0);
 }
 
-// binary cidr match, v4 and v6 in one path. bare IPs allowed
 function aegis_mfa_cidr_match(string $ip, string $cidr): bool {
     $ip_bin = @inet_pton($ip);
     if ($ip_bin === false) return false;
@@ -120,7 +180,7 @@ function aegis_mfa_cidr_match(string $ip, string $cidr): bool {
     list($subnet, $bits) = explode('/', $cidr, 2);
     $sub_bin = @inet_pton($subnet);
     if ($sub_bin === false || !ctype_digit($bits)) return false;
-    if (strlen($ip_bin) !== strlen($sub_bin)) return false;   // family mismatch
+    if (strlen($ip_bin) !== strlen($sub_bin)) return false;
     $bits = (int)$bits;
     if ($bits < 0 || $bits > strlen($ip_bin) * 8) return false;
     $bytes = intdiv($bits, 8);
@@ -141,7 +201,7 @@ function aegis_mfa_ip_trusted(string $ip, ?array $cidrs = null): bool {
     return false;
 }
 
-// client IP. XFF honoured only when REMOTE_ADDR is a configured proxy, otherwise trivially spoofable
+// XFF is honoured only when REMOTE_ADDR is a configured proxy, otherwise it is trivially spoofable
 function aegis_mfa_client_ip(): string {
     $remote = $_SERVER['REMOTE_ADDR'] ?? '';
     $proxies = aegis_mfa_config()['trusted_proxies'];
@@ -159,14 +219,12 @@ function aegis_mfa_session_name(): string {
     return ini_get('session.name') ?: 'PHPSESSID';
 }
 
-// start a session if none is active, a no-op when unraid already opened one
 function aegis_mfa_session_ensure(): bool {
     if (session_status() === PHP_SESSION_ACTIVE) return true;
     if (session_status() === PHP_SESSION_DISABLED) return false;
     return @session_start();
 }
 
-// confirmed unraid 7.3.1 keys: unraid_login (timestamp), unraid_user (name)
 function aegis_mfa_has_unraid_session(): bool {
     return !empty($_SESSION['unraid_login']) && !empty($_SESSION['unraid_user']);
 }
@@ -175,16 +233,19 @@ function aegis_mfa_current_user(): string {
     return is_string($_SESSION['unraid_user'] ?? null) ? $_SESSION['unraid_user'] : '';
 }
 
-// mark this session as passed. our own namespace, unraid keys never touched
+// our own session namespace, unraid's keys are never touched. the flag is bound to the user so a switch cannot inherit it
 function aegis_mfa_mark_verified(?string $user = null): bool {
     if (!aegis_mfa_session_ensure()) return false;
     $user = $user ?? aegis_mfa_current_user();
     if ($user === '') return false;
+
+    aegis_mfa_mark_seen($user);
+
+    // no regenerate here, unraid's .login.php already does it with delete_old_session at password login
     $_SESSION['aegis_mfa'] = ['verified' => true, 'user' => $user, 'at' => time()];
     return true;
 }
 
-// the verified flag belongs to the current user, a user switch never inherits it
 function aegis_mfa_session_verified(): bool {
     $m = $_SESSION['aegis_mfa'] ?? null;
     if (!is_array($m) || empty($m['verified'])) return false;
@@ -192,8 +253,6 @@ function aegis_mfa_session_verified(): bool {
     return $user !== '' && ($m['user'] ?? '') === $user;
 }
 
-// the session was offered the prompt and moved on. grace and dry-run prompt once per session, not per request.
-// Lives next to verified so a fresh login clears both, merging keeps an existing verified intact
 function aegis_mfa_mark_nudged(?string $user = null): bool {
     if (!aegis_mfa_session_ensure()) return false;
     $user = $user ?? aegis_mfa_current_user();
@@ -202,10 +261,10 @@ function aegis_mfa_mark_nudged(?string $user = null): bool {
     if (!is_array($m) || ($m['user'] ?? '') !== $user) $m = ['user' => $user];
     $m['nudged'] = time();
     $_SESSION['aegis_mfa'] = $m;
+    aegis_mfa_mark_seen($user);
     return true;
 }
 
-// same user-switch guard as the verified flag
 function aegis_mfa_session_nudged(): bool {
     $m = $_SESSION['aegis_mfa'] ?? null;
     if (!is_array($m) || empty($m['nudged'])) return false;
@@ -213,8 +272,7 @@ function aegis_mfa_session_nudged(): bool {
     return $user !== '' && ($m['user'] ?? '') === $user;
 }
 
-// top-level page navigations only. bouncing assets or pollers turns every subresource 401 into a /login redirect
-// and floods the authlimit zone. Fetch Metadata when present, Accept otherwise, anything ambiguous passes (fail open)
+// only bounce top-level navigations. bouncing assets or pollers floods the nginx authlimit zone
 function aegis_mfa_request_is_navigation(): bool {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') return false;
     $dest = $_SERVER['HTTP_SEC_FETCH_DEST'] ?? null;
@@ -222,15 +280,23 @@ function aegis_mfa_request_is_navigation(): bool {
     return strpos((string)($_SERVER['HTTP_ACCEPT'] ?? ''), 'text/html') !== false;
 }
 
-// webGUI-capable users, mirroring how .login.php authenticates: in passwd, with a usable shadow hash.
-// $getent lets the tests inject fixture lines
+// a browser asking for a page, form posts included. anything else gets a bare 401 instead of
+// our html, or unraid's own pollers end up parsing the challenge page as their data
+function aegis_mfa_request_wants_page(): bool {
+    $dest = $_SERVER['HTTP_SEC_FETCH_DEST'] ?? null;
+    if ($dest !== null) return $dest === 'document';
+    $accept = (string)($_SERVER['HTTP_ACCEPT'] ?? '');
+    return $accept === '' || stripos($accept, 'text/html') !== false;
+}
+
+// webGUI-capable users only: in passwd, with a usable shadow hash. lock markers cannot log in
 function aegis_mfa_unraid_users(?callable $getent = null): array {
     $getent = $getent ?? function (string $db): array {
         $out = [];
         @exec('/usr/bin/getent ' . escapeshellarg($db) . ' 2>/dev/null', $out);
         return $out;
     };
-    // shadow: user -> hash
+
     $hashes = [];
     foreach ($getent('shadow') as $line) {
         $f = explode(':', $line);
@@ -243,7 +309,7 @@ function aegis_mfa_unraid_users(?callable $getent = null): array {
         if (count($f) < 3) continue;
         $name = $f[0];
         $uid  = (int)$f[2];
-        // root plus uid >= 1000 with a real hash. lock markers (*, !, !!) and empty fields cannot web-login
+
         if ($name !== 'root' && $uid < 1000) continue;
         $h = $hashes[$name] ?? '';
         if ($h === '' || $h[0] === '*' || $h[0] === '!') continue;
@@ -252,14 +318,13 @@ function aegis_mfa_unraid_users(?callable $getent = null): array {
     return $users;
 }
 
-// reconcile secrets.json against the live user list: new users become pending with a grace deadline,
-// removed users are dropped, existing entries untouched. idempotent, runs at boot and from cron
+// a snapshot missing root means a bad read, not no users. add-only then, or one bad read wipes every enrolment
 function aegis_mfa_sync_users(?callable $getent = null, ?int $now = null): array {
     $now   = $now ?? time();
     $live  = aegis_mfa_unraid_users($getent);
-    // an empty list means the read failed, not no users: root always exists. acting on it would wipe every enrolment
+
     if (!$live) return ['added' => [], 'removed' => [], 'skipped' => 'no_live_users'];
-    // a list without root is also a bad read (shadow not loaded yet at boot). add-only then, never delete
+
     $trustRemovals = in_array('root', $live, true);
     $grace = (int)aegis_mfa_config()['grace_period_days'] * 86400;
     $added = []; $removed = []; $kept = [];
@@ -268,15 +333,19 @@ function aegis_mfa_sync_users(?callable $getent = null, ?int $now = null): array
             if (!isset($sec['users']) || !is_array($sec['users'])) $sec['users'] = [];
             $liveSet = array_flip($live);
             foreach ($live as $u) {
-                if (!isset($sec['users'][$u])) {
+                if (!isset($sec['users'][$u]) || !is_array($sec['users'][$u])) {
                     $sec['users'][$u] = ['status' => 'pending', 'grace_until' => $now + $grace];
+                    $added[] = $u;
+                } elseif (($sec['users'][$u]['status'] ?? '') === '') {
+                    // seen_at can be written before the first sync, keep it and fill in the rest
+                    $sec['users'][$u]['status']      = 'pending';
+                    $sec['users'][$u]['grace_until'] = $now + $grace;
                     $added[] = $u;
                 }
             }
             foreach (array_keys($sec['users']) as $u) {
                 if (isset($liveSet[$u])) continue;
-                // an enrolled user has real setup effort behind the secret, one bad snapshot must never delete that.
-                // Only prune accounts that never finished enrolment, and only from a snapshot that includes root
+
                 $status = $sec['users'][$u]['status'] ?? '';
                 if ($status === 'enrolled' || !$trustRemovals) { $kept[] = $u; continue; }
                 unset($sec['users'][$u]);
@@ -291,7 +360,6 @@ function aegis_mfa_sync_users(?callable $getent = null, ?int $now = null): array
     return $res;
 }
 
-// 'enrolled' | 'pending' | 'locked' (grace expired) | 'none'
 function aegis_mfa_user_status(string $user, ?int $now = null): string {
     $sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
     $u = $sec['users'][$user] ?? null;
@@ -312,23 +380,28 @@ function aegis_mfa_get_secret(string $user): ?string {
     return is_string($s) && $s !== '' ? $s : null;
 }
 
-// replay protection state: highest TOTP step already consumed
 function aegis_mfa_get_last_step(string $user): int {
     $sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
     return (int)($sec['users'][$user]['last_step'] ?? 0);
 }
 
+// true only when this call advanced the step, so two parallel posts of one code cannot both pass
 function aegis_mfa_set_last_step(string $user, int $step): bool {
-    return aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
-        function ($sec) use ($user, $step) {
+    $advanced = false;
+    aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
+        function ($sec) use ($user, $step, &$advanced) {
             if (!isset($sec['users'][$user]) || !is_array($sec['users'][$user])) return $sec;
             $cur = (int)($sec['users'][$user]['last_step'] ?? 0);
-            if ($step > $cur) $sec['users'][$user]['last_step'] = $step;
+            if ($step > $cur) {
+                $sec['users'][$user]['last_step'] = $step;
+                $advanced = true;
+            }
             return $sec;
         });
+    return $advanced;
 }
 
-// lockout is RAM-backed and resets on reboot, fail-open
+// counters live in RAM on purpose, cleared on reboot, keeps brute force off the flash
 function aegis_mfa_lockout_path(): string {
     return aegis_mfa_state() . '/lockout.json';
 }
@@ -339,7 +412,6 @@ function aegis_mfa_is_locked(string $ip, ?int $now = null): bool {
     return is_array($e) && (int)($e['locked_until'] ?? 0) > ($now ?? time());
 }
 
-// count a failed attempt, returns attempts remaining, 0 = locked now
 function aegis_mfa_record_failure(string $ip, string $user, ?int $now = null): int {
     $lk = aegis_mfa_config()['lockout'];
     $now = $now ?? time();
@@ -355,9 +427,20 @@ function aegis_mfa_record_failure(string $ip, string $user, ?int $now = null): i
             $e['username'] = $user;
             if ($e['count'] >= $lk['threshold']) {
                 $e['locked_until'] = $now + $lk['lock_seconds'];
+                if (!isset($d['history']) || !is_array($d['history'])) $d['history'] = [];
+                $d['history'][$ip] = [
+                    'count'        => $e['count'],
+                    'locked_at'    => $now,
+                    'locked_until' => $e['locked_until'],
+                    'username'     => $user,
+                ];
+                $d['history'] = aegis_mfa_history_trim($d['history']);
             }
             $remaining = max(0, $lk['threshold'] - $e['count']);
             $d['failures'][$ip] = $e;
+            if (count($d['failures']) > aegis_mfa_failures_max()) {
+                $d['failures'] = aegis_mfa_trim_map($d['failures'], 'last_at', aegis_mfa_failures_max());
+            }
             return $d;
         });
     return $remaining;
@@ -371,7 +454,6 @@ function aegis_mfa_clear_failures(string $ip): bool {
         });
 }
 
-// cron cleanup: drop entries with no active lock and an expired window
 function aegis_mfa_prune_lockouts(?int $now = null): bool {
     $lk = aegis_mfa_config()['lockout'];
     $now = $now ?? time();
@@ -384,4 +466,121 @@ function aegis_mfa_prune_lockouts(?int $now = null): bool {
             }
             return $d;
         });
+}
+
+// RAM alongside the counters, the flash copy is a snapshot the cron takes
+function aegis_mfa_history_path(): string {
+    return aegis_mfa_flash() . '/lockouts.json';
+}
+
+function aegis_mfa_history_max(): int {
+    return 100;
+}
+
+// every failure rewrites the whole tmpfs file, so a flood from many addresses needs a ceiling
+function aegis_mfa_failures_max(): int {
+    return 500;
+}
+
+function aegis_mfa_trim_map(array $map, string $key, int $max): array {
+    uasort($map, function ($a, $b) use ($key) {
+        return (int)($b[$key] ?? 0) <=> (int)($a[$key] ?? 0);
+    });
+    return array_slice($map, 0, $max, true);
+}
+
+// one row per address, newest first, oldest dropped past the cap
+function aegis_mfa_history_trim(array $entries): array {
+    return aegis_mfa_trim_map($entries, 'locked_at', aegis_mfa_history_max());
+}
+
+function aegis_mfa_history_merge(array $base, array $add): array {
+    foreach ($add as $ip => $e) {
+        if (!is_string($ip) || !is_array($e)) continue;
+        $have = $base[$ip] ?? null;
+        if (!is_array($have) || (int)($e['locked_at'] ?? 0) >= (int)($have['locked_at'] ?? 0)) {
+            $base[$ip] = $e;
+        }
+    }
+    return aegis_mfa_history_trim($base);
+}
+
+function aegis_mfa_history_ram(): array {
+    $d = aegis_mfa_read_json(aegis_mfa_lockout_path());
+    $h = $d['history'] ?? null;
+    return is_array($h) ? $h : [];
+}
+
+function aegis_mfa_history_disk(): array {
+    $d = aegis_mfa_read_json(aegis_mfa_history_path());
+    $e = $d['entries'] ?? null;
+    return is_array($e) ? $e : [];
+}
+
+// called from the cron: writes only when the merged set differs from what is already on disk
+function aegis_mfa_flush_lockout_history(): bool {
+    if (empty(aegis_mfa_config()['lockout_history'])) return false;
+    $ram = aegis_mfa_history_ram();
+    if (!$ram) return false;
+    $disk   = aegis_mfa_history_disk();
+    $merged = aegis_mfa_history_merge($disk, $ram);
+    if (json_encode($merged) === json_encode($disk)) return false;
+    return aegis_mfa_write_json(aegis_mfa_history_path(), ['version' => 1, 'entries' => $merged]);
+}
+
+function aegis_mfa_lockout_history(?int $now = null): array {
+    $now = $now ?? time();
+    $all = aegis_mfa_history_merge(aegis_mfa_history_disk(), aegis_mfa_history_ram());
+    $out = [];
+    foreach ($all as $ip => $e) {
+        if (!is_array($e)) continue;
+        $out[] = [
+            'ip'        => (string)$ip,
+            'count'     => (int)($e['count'] ?? 0),
+            'username'  => is_string($e['username'] ?? null) ? $e['username'] : '',
+            'locked_at' => (int)($e['locked_at'] ?? 0),
+            'remaining' => max(0, (int)($e['locked_until'] ?? 0) - $now),
+        ];
+    }
+    return $out;
+}
+
+// drops the row and the live counter with it, so on an active lock this is the unlock
+function aegis_mfa_forget_lockout(string $ip): bool {
+    if (filter_var($ip, FILTER_VALIDATE_IP) === false) return false;
+    aegis_mfa_update_json(aegis_mfa_lockout_path(), function ($d) use ($ip) {
+        unset($d['failures'][$ip], $d['history'][$ip]);
+        return $d;
+    });
+    if (!is_file(aegis_mfa_history_path())) return true;
+    return aegis_mfa_update_json(aegis_mfa_history_path(), function ($d) use ($ip) {
+        unset($d['entries'][$ip]);
+        return $d;
+    });
+}
+
+// expired rows only: an address still serving its lock stays visible, unlock it on its own row
+function aegis_mfa_clear_lockout_history(?int $now = null): int {
+    $now = $now ?? time();
+    $gone = 0;
+    $expired = function ($e) use ($now) {
+        return !is_array($e) || (int)($e['locked_until'] ?? 0) <= $now;
+    };
+    aegis_mfa_update_json(aegis_mfa_lockout_path(), function ($d) use ($expired, &$gone) {
+        if (!is_array($d['history'] ?? null)) return $d;
+        foreach ($d['history'] as $ip => $e) {
+            if ($expired($e)) { unset($d['history'][$ip]); $gone++; }
+        }
+        return $d;
+    });
+    if (is_file(aegis_mfa_history_path())) {
+        aegis_mfa_update_json(aegis_mfa_history_path(), function ($d) use ($expired) {
+            if (!is_array($d['entries'] ?? null)) return $d;
+            foreach ($d['entries'] as $ip => $e) {
+                if ($expired($e)) unset($d['entries'][$ip]);
+            }
+            return $d;
+        });
+    }
+    return $gone;
 }

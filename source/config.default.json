@@ -9,5 +9,6 @@
         "window_seconds": 300,
         "lock_seconds": 900
     },
-    "grace_period_days": 7
+    "lockout_history": true,
+    "grace_period_days": 2
 }

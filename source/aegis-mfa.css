@@ -632,7 +632,7 @@
 }
 .amfa-credits-title-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
   margin-bottom: 4px;
   flex-wrap: wrap;
@@ -652,6 +652,18 @@
   border: 1px solid rgba(244,125,66,.45);
 }
 .amfa-credits-version:empty { display: none; }
+.amfa-credits-suite {
+  font-size: 9px;
+  letter-spacing: .2px;
+  opacity: .42;
+}
+.amfa-credits-foot-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
 .amfa-credits-desc {
   font-size: 11px;
   color: rgba(255,255,255,.60);
@@ -1044,9 +1056,19 @@
 @media (max-width: 768px)  { .amfa-head { width: 100%; max-width: 100%; flex-direction: column; align-items: stretch; } }
 
 .amfa-head-title { display: flex; align-items: center; gap: .9rem; min-width: 0; }
-.amfa-head-title .amfa-shield { width: 34px; height: 34px; color: var(--amfa-c-text); flex-shrink: 0; }
-.amfa-head-title h2 { font-size: 17px; font-weight: 600; margin: 0; color: var(--amfa-c-text); line-height: 1.2; }
-.amfa-head-title p  { font-size: 11.5px; margin: 2px 0 0; color: var(--amfa-c-text-muted); line-height: 1.2; }
+/* no background of its own, so it takes unraid's text colour: a bad theme read can only make it plain */
+.amfa-head-title .amfa-shield { width: 34px; height: 34px; color: inherit; opacity: .9; flex-shrink: 0; }
+.amfa-head-title h2 { font-size: 17px; font-weight: 600; margin: 0; color: inherit; line-height: 1.2; }
+.amfa-head-title p  { font-size: 11.5px; margin: 2px 0 0; color: inherit; opacity: .55; line-height: 1.2; }
+.amfa-suite {
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: .2px;
+  opacity: .42;
+  margin-left: 7px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
 
 .amfa-power-btn {
   display: inline-flex !important;
@@ -1085,13 +1107,14 @@
 @media (max-width: 768px)  { .aegis-mfa-settings { width: 100%; max-width: 100%; } }
 
 /* status notices (info / warn / error / dry-run) */
+/* tinted, not opaque, so it also sits on the page: colour comes from unraid, the tint carries the meaning */
 .amfa-note {
   border-radius: 6px;
   padding: 10px 14px;
   font-size: 12.5px;
   line-height: 1.5;
   margin-bottom: 12px;
-  color: var(--amfa-c-text);
+  color: inherit;
 }
 .amfa-note.ok   { background: rgba(76,175,80,.1);  border: 1px solid rgba(76,175,80,.35); }
 .amfa-note.warn { background: rgba(244,125,66,.1); border: 1px solid rgba(244,125,66,.4); }
@@ -1141,8 +1164,9 @@
   margin-bottom: 14px;
 }
 @media (max-width: 640px) { .amfa-cards { grid-template-columns: repeat(2, 1fr); } }
+/* opaque, not a veil over whatever the page is: the text tokens need the surface they were picked for */
 .amfa-cardx {
-  background: var(--amfa-c-bg-subtle);
+  background: var(--amfa-panel-bg);
   border: 1px solid var(--amfa-c-border);
   border-radius: 6px;
   padding: 10px 14px;
@@ -1266,3 +1290,120 @@
   color: var(--amfa-accent);
 }
 .amfa-light .amfa-recovery-note code { background: rgba(0,0,0,.06); }
+
+/* lockout history */
+.amfa-lk {
+  width: 100%;
+  border-collapse: collapse;
+}
+.amfa-lk th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--amfa-c-text-muted);
+  padding: 8px 16px;
+  background: var(--amfa-label-bg);
+  border-bottom: 1px solid var(--amfa-c-border-row);
+}
+.amfa-lk td {
+  font-size: 12.5px;
+  color: var(--amfa-c-text);
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--amfa-c-border-row);
+}
+.amfa-lk tr:nth-child(odd)  td { background: var(--amfa-row-odd); }
+.amfa-lk tr:nth-child(even) td { background: var(--amfa-row-even); }
+.amfa-lk-ip {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
+}
+.amfa-lk .warn { color: var(--amfa-accent); }
+.amfa-lk-done { color: var(--amfa-c-text-muted); }
+.amfa-lk-act { text-align: right; white-space: nowrap; }
+.amfa-lk-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  background: var(--amfa-row-even);
+}
+
+/* backup code re-issue, mirrors step 3 of the enrolment wizard */
+.amfa-regen {
+  background: var(--amfa-panel-bg);
+  border: 1px solid var(--amfa-accent-border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.amfa-regen-lead {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--amfa-c-text);
+  margin: 0 0 4px;
+}
+.amfa-regen-sub {
+  font-size: 11.5px;
+  color: var(--amfa-c-text-mid);
+  line-height: 1.55;
+  margin: 0 0 12px;
+  max-width: 60ch;
+}
+.amfa-regen .amfa-dl {
+  display: inline-block;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 500;
+  /* unraid's global button rules already won here once, hence the important */
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  color: var(--amfa-accent);
+  text-decoration: none;
+  margin-bottom: 12px;
+}
+.amfa-regen .amfa-dl:hover { text-decoration: none; opacity: .75; }
+.amfa-regen-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--amfa-c-text-mid);
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+.amfa-regen-label {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--amfa-c-text-muted);
+  margin: 0 0 5px;
+}
+.amfa-regen-input {
+  width: 160px;
+  background: var(--amfa-ctrl-bg);
+  border: 1px solid var(--amfa-ctrl-border);
+  border-radius: 4px;
+  color: var(--amfa-c-text);
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+.amfa-regen-input:focus { outline: none; border-color: var(--amfa-accent); }
+.amfa-regen-btns { display: flex; gap: 8px; margin-top: 12px; }
+
+.amfa-users-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--amfa-c-border-row);
+}

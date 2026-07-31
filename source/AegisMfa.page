@@ -1,13 +1,14 @@
 Menu="Utilities"
 Title="Aegis MFA Settings"
-Icon="<svg class='PanelIcon' viewBox='0 0 385 421' width='33' height='33' fill='currentColor' aria-hidden='true'><g transform='translate(0,421) scale(0.1,-0.1)'><path d='M963 3996 l-963 -211 0 -845 c0 -936 1 -953 61 -1145 120 -381 447 -804 904 -1170 339 -272 892 -617 990 -618 12 0 279 169 550 348 660 437 1119 955 1273 1437 68 213 72 272 72 1195 l0 798 -882 193 c-486 106 -919 201 -963 211 l-80 17 -962 -210z m1070 -1241 c364 -95 475 -525 204 -788 l-70 -69 27 -381 c15 -210 29 -408 33 -439 l6 -58 -308 0 -308 0 6 58 c4 31 18 229 33 439 l27 381 -70 69 c-343 333 -37 907 420 788z'/></g></svg>"
+Icon="<svg class='PanelIcon' viewBox='-20 -20 425 461' width='33' height='33' aria-hidden='true'><g transform='translate(0,421) scale(0.1,-0.1)'><path fill='none' stroke='currentColor' stroke-width='360' stroke-linejoin='round' d='M963 3996 l-963 -211 0 -845 c0 -936 1 -953 61 -1145 120 -381 447 -804 904 -1170 339 -272 892 -617 990 -618 12 0 279 169 550 348 660 437 1119 955 1273 1437 68 213 72 272 72 1195 l0 798 -882 193 c-486 106 -919 201 -963 211 l-80 17 -962 -210z'/><path fill='currentColor' d='M2033 2755 c364 -95 475 -525 204 -788 l-70 -69 27 -381 c15 -210 29 -408 33 -439 l6 -58 -308 0 -308 0 6 58 c4 31 18 229 33 439 l27 381 -70 69 c-343 333 -37 907 420 788z'/></g></svg>"
 ---
 <?php
-/*
- * Aegis MFA for Unraid - settings page
- * Copyright (C) 2026 Lazaros Chalkidis
- * License GPLv3
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
+
 require_once '/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaAdmin.php';
 require_once '/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaEnroll.php';
 require_once '/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaInstall.php';
@@ -15,7 +16,17 @@ require_once '/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaInstall.php';
 $amfaEsc = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 $amfaNotice = ''; $amfaNoticeKind = 'ok'; $amfaNewCodes = null; $amfaBypassUrl = null;
 
-// POST actions, Unraid's own csrf_token is validated upstream
+// our own token: every action below changes authentication state, too much to leave to an upstream check
+aegis_mfa_mark_seen(aegis_mfa_current_user());
+
+$amfaCsrf = aegis_mfa_csrf_token();
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])
+    && !aegis_mfa_csrf_check((string)($_POST['amfa_csrf'] ?? ''))) {
+    unset($_POST['amfa_action']);
+    $amfaNotice = 'Session expired, nothing was changed. Reload the page and try again.';
+    $amfaNoticeKind = 'err';
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
     switch ($_POST['amfa_action']) {
 
@@ -23,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
             $on = ($_POST['enabled'] ?? '') === '1';
             aegis_mfa_set_enabled($on);
             if ($on && (int)aegis_mfa_config(true)['enforce_after'] === 0) {
-                aegis_mfa_start_dry_run(24);   // first enable begins with dry-run
+                aegis_mfa_start_dry_run(24);
             }
             $r = aegis_mfa_reconcile_patches();
             if ($on && ($r['ok'] ?? false)) {
@@ -37,9 +48,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
                             . 'and MFA stays off. This usually means Unraid restructured these files, '
                             . 'or another plugin has patched them.';
                 $amfaNoticeKind = 'err';
+            } elseif (!$on) {
+                $amfaNotice = 'MFA disabled, login patches removed.';
+            } elseif (aegis_mfa_enforcing()) {
+                // a dry run only starts while enforce_after is 0, so a re-enable after enforce goes straight to enforcing
+                $amfaNotice = 'MFA enabled and enforcing straight away, this server already '
+                            . 'finished its dry run. A code is required at the next login.';
             } else {
-                $amfaNotice = $on ? 'MFA enabled. A dry run is running, see the banner below to enforce now.'
-                                  : 'MFA disabled, login patches removed.';
+                $amfaNotice = 'MFA enabled. A dry run is running, see the banner below to enforce now.';
             }
             break;
 
@@ -58,15 +74,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
             break;
 
         case 'save_grace':
-            aegis_mfa_set_grace_days((int)($_POST['grace_days'] ?? 7));
+            aegis_mfa_set_grace_days((int)($_POST['grace_days'] ?? 2));
             $amfaNotice = 'Grace period saved.';
             break;
 
         case 'regen_codes':
-            $amfaNewCodes = aegis_mfa_regenerate_backup_codes((string)($_POST['user'] ?? ''));
-            $amfaNotice = $amfaNewCodes === null
-                ? 'Account is not enrolled.' : 'New backup codes generated, shown once below.';
-            if ($amfaNewCodes === null) $amfaNoticeKind = 'err';
+            $amfaNewCodes = aegis_mfa_begin_backup_regen((string)($_POST['user'] ?? ''));
+            if ($amfaNewCodes === null) {
+                $amfaNotice = 'Account is not enrolled.';
+                $amfaNoticeKind = 'err';
+            } else {
+                $amfaNotice = 'New backup codes are ready below. Your current codes keep working '
+                            . 'until you confirm.';
+            }
+            break;
+
+        case 'confirm_codes':
+            $r = aegis_mfa_commit_backup_regen((string)($_POST['backup_confirm'] ?? ''));
+            if (($r['ok'] ?? false) === true) {
+                $amfaNotice = 'New backup codes are active. The old ones no longer work.';
+            } else {
+                $amfaNoticeKind = 'err';
+                $amfaNotice = ($r['reason'] ?? '') === 'bad_confirm'
+                    ? 'That code does not match. Copy one exactly as shown below.'
+                    : 'Could not save the new codes. Your existing codes still work.';
+            }
+            break;
+
+        case 'cancel_codes':
+            aegis_mfa_cancel_backup_regen();
+            $amfaNotice = 'Cancelled. Your existing backup codes still work.';
             break;
 
         case 'reset_user':
@@ -78,14 +115,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
             $u = (string)($_POST['user'] ?? '');
             $tok = aegis_mfa_create_bypass_token($u, 86400);
             if ($tok !== null) {
-                $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-                $amfaBypassUrl = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'unraid')
-                               . '/plugins/aegis.mfa/include/setup.php?user='
+
+                // path only, HTTP_HOST is attacker-controlled and a poisoned link would carry the token elsewhere
+                $amfaBypassUrl = '/plugins/aegis.mfa/include/setup.php?user='
                                . rawurlencode($u) . '&token=' . $tok;
-                $amfaNotice = 'One-time setup link created (valid 24h), shown once below.';
+                $amfaNotice = 'One-time setup link created (valid 24h), shown once below. '
+                            . 'Open it on this server, the path is relative to the webGUI address you are on.';
             } else {
                 $amfaNotice = 'Could not create the link.'; $amfaNoticeKind = 'err';
             }
+            break;
+
+        case 'history_toggle':
+            aegis_mfa_set_lockout_history(($_POST['history_on'] ?? '') === '1');
+            $amfaNotice = ($_POST['history_on'] ?? '') === '1'
+                ? 'Lockout history is kept. The cron saves it at most every ten minutes.'
+                : 'Lockout history is no longer saved. Existing entries were left in place.';
+            break;
+
+        case 'unlock_ip':
+        case 'delete_lock':
+            $amfaIp = (string)($_POST['lock_ip'] ?? '');
+            if (aegis_mfa_forget_lockout($amfaIp)) {
+                $amfaNotice = $_POST['amfa_action'] === 'unlock_ip'
+                    ? 'Unlocked. The address can try again right away.'
+                    : 'Entry removed from the history.';
+            } else {
+                $amfaNotice = 'Not a valid address, nothing was changed.';
+                $amfaNoticeKind = 'err';
+            }
+            break;
+
+        case 'clear_history':
+            $amfaGone = aegis_mfa_clear_lockout_history();
+            $amfaNotice = $amfaGone === 0
+                ? 'Nothing to clear, every entry is still serving its lock.'
+                : $amfaGone . ' expired ' . ($amfaGone === 1 ? 'entry' : 'entries') . ' cleared.';
             break;
 
         case 'sync_users':
@@ -117,24 +182,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
 
 $amfaSum = aegis_mfa_admin_summary();
 $amfaPatch = aegis_mfa_patch_state();
-$amfaValidated = aegis_mfa_version_validated();
-$amfaUnraid = @trim(str_replace('"', '', explode('=', @file_get_contents('/etc/unraid-version') ?: '')[1] ?? ''));
 
-// follow the Unraid theme like the other Aegis plugins
-$amfaDynCfg   = @parse_ini_file('/boot/config/plugins/dynamix/dynamix.cfg', true);
-$amfaTheme    = $amfaDynCfg['display']['theme'] ?? '';
-$amfaTheme    = in_array($amfaTheme, ['black','white','azure','gray'], true) ? $amfaTheme : 'black';
-$amfaLight    = in_array($amfaTheme, ['white','azure'], true);
+$amfaTheme    = aegis_mfa_theme();
+$amfaLight    = aegis_mfa_theme_is_light($amfaTheme);
 $amfaRootCls  = ' amfa-theme-' . $amfaTheme . ($amfaLight ? ' amfa-light' : '');
 
-// running build, for the footer badge and the credits box
 $amfaVer = @trim(@file_get_contents('/usr/local/emhttp/plugins/aegis.mfa/VERSION') ?: '');
 if ($amfaVer === '') {
     $amfaPlg = @file_get_contents('/boot/config/plugins/aegis.mfa/aegis.mfa.plg');
     if ($amfaPlg && preg_match('/<!ENTITY\s+version\s+"([^"]+)"/i', $amfaPlg, $m)) $amfaVer = $m[1];
 }
 if ($amfaVer === '') $amfaVer = 'dev';
-$amfaCssVer = $amfaVer;
+// the version alone repeats within a day, and a stale stylesheet then survives every rebuild
+$amfaCssMt  = @filemtime('/usr/local/emhttp/plugins/aegis.mfa/aegis-mfa.css');
+$amfaCssVer = $amfaVer . ($amfaCssMt ? '-' . $amfaCssMt : '');
 ?>
 <link type="text/css" rel="stylesheet" href="/plugins/aegis.mfa/aegis-mfa.css?v=<?= $amfaEsc($amfaCssVer) ?>">
 
@@ -142,12 +203,12 @@ $amfaCssVer = $amfaVer;
   <div class="amfa-head-title">
     <svg class="amfa-shield" viewBox="-20 -20 425 461" width="34" height="34" aria-hidden="true"><g transform="translate(0,421) scale(0.1,-0.1)"><path fill="none" stroke="currentColor" stroke-width="360" stroke-linejoin="round" d="M963 3996 l-963 -211 0 -845 c0 -936 1 -953 61 -1145 120 -381 447 -804 904 -1170 339 -272 892 -617 990 -618 12 0 279 169 550 348 660 437 1119 955 1273 1437 68 213 72 272 72 1195 l0 798 -882 193 c-486 106 -919 201 -963 211 l-80 17 -962 -210z"/><path fill="currentColor" d="M2033 2755 c364 -95 475 -525 204 -788 l-70 -69 27 -381 c15 -210 29 -408 33 -439 l6 -58 -308 0 -308 0 6 58 c4 31 18 229 33 439 l27 381 -70 69 c-343 333 -37 907 420 788z"/></g></svg>
     <div>
-      <h2>Aegis MFA</h2>
+      <h2>Aegis MFA<span class="amfa-suite">part of AEGIS Suite</span></h2>
       <p>Two-factor authentication for the Unraid webGUI</p>
     </div>
   </div>
   <?php
-  // the enable message depends on whether a dry-run will actually run: a fresh enable starts one, a re-enable after Enforce now does not
+
   $amfaEnfAt   = (int)(aegis_mfa_config()['enforce_after'] ?? 0);
   $amfaWillDry = ($amfaEnfAt === 0 || $amfaEnfAt > time());
   if ($amfaSum['enabled']) {
@@ -167,6 +228,7 @@ $amfaCssVer = $amfaVer;
   ?>
   <form method="post" class="amfa-inline">
     <input type="hidden" name="csrf_token" value="<?= $amfaEsc($var['csrf_token'] ?? '') ?>">
+    <input type="hidden" name="amfa_csrf" value="<?= $amfaEsc($amfaCsrf) ?>">
     <input type="hidden" name="amfa_action" value="toggle">
     <input type="hidden" name="enabled" value="<?= $amfaSum['enabled'] ? '0' : '1' ?>">
     <button type="submit" class="amfa-power-btn <?= $amfaSum['enabled'] ? 'on' : 'off' ?>"
@@ -183,7 +245,10 @@ $amfaCssVer = $amfaVer;
 
 <form name="aegis_mfa_settings" method="post" class="aegis-mfa-settings<?= $amfaRootCls ?>" autocomplete="off">
 <input type="hidden" name="csrf_token" value="<?= $amfaEsc($var['csrf_token'] ?? '') ?>">
+<input type="hidden" name="amfa_csrf" value="<?= $amfaEsc($amfaCsrf) ?>">
 <input type="hidden" name="user" id="amfaUserField" value="">
+<input type="hidden" name="lock_ip" id="amfaLockIpField" value="">
+<input type="hidden" name="history_on" id="amfaHistOn" value="">
 
 <?php if ($amfaNotice !== ''): ?>
 <div class="amfa-note <?= $amfaEsc($amfaNoticeKind) ?>"><?= $amfaEsc($amfaNotice) ?></div>
@@ -195,10 +260,10 @@ $amfaCssVer = $amfaVer;
 The boot service retries automatically; check the syslog for aegis-mfa entries.</div>
 <?php endif; ?>
 
-<?php if ($amfaSum['enabled'] && $amfaPatch['state'] === 'full' && !$amfaValidated): ?>
-<div class="amfa-note warn">Unraid <?= $amfaEsc($amfaUnraid ?: 'this release') ?> has not been tested
-with this plugin version. MFA is active and the login files passed all structure checks, so it should
-work normally. If you hit any problem, run <code>aegis-mfa disable</code> from SSH and report it.</div>
+<?php if ($amfaSum['enabled'] && $amfaSum['client_trusted']): ?>
+<div class="amfa-note warn">Your address <code><?= $amfaEsc($amfaSum['client_ip']) ?></code> is on the
+trusted list, so this browser is never asked for a code. Remove it under Trusted LAN to be prompted
+like everyone else.</div>
 <?php endif; ?>
 
 <?php if ($amfaSum['dry_run']): ?>
@@ -220,8 +285,38 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
 </div>
 <?php endif; ?>
 
-<?php if (is_array($amfaNewCodes)): ?>
-<div class="amfa-codes"><?php foreach ($amfaNewCodes as $c) echo '<div>' . $amfaEsc($c) . '</div>'; ?></div>
+<?php
+$amfaRegen = aegis_mfa_regen_state();
+if ($amfaRegen !== null):
+    $amfaRegenUser  = (string)$amfaRegen['user'];
+    $amfaRegenCodes = $amfaRegen['plain'];
+?>
+<div class="amfa-regen">
+  <p class="amfa-regen-lead">Save your new backup codes</p>
+  <p class="amfa-regen-sub">Each code works once if you lose access to your authenticator.
+    They replace your current codes only after you confirm, and they will not be shown again.</p>
+  <div class="amfa-codes"><?php foreach ($amfaRegenCodes as $c) echo '<div>' . $amfaEsc($c) . '</div>'; ?></div>
+  <button type="button" class="amfa-dl" id="amfaCodesDl"
+          data-user="<?= $amfaEsc($amfaRegenUser) ?>">
+    <i class="fa fa-download" aria-hidden="true"></i> Download as text file
+  </button>
+  <label class="amfa-regen-check">
+    <input type="checkbox" id="amfaRegenSaved">
+    <span>I have saved these codes somewhere safe</span>
+  </label>
+  <p class="amfa-regen-label">Type one of the codes above to confirm</p>
+  <input class="amfa-regen-input" type="text" name="backup_confirm" maxlength="11"
+         placeholder="xxxxx-xxxxx" autocomplete="off">
+  <div class="amfa-regen-btns">
+    <button type="submit" name="amfa_action" value="cancel_codes" class="amfa-action-btn">
+      <i class="fa fa-times" aria-hidden="true"></i> Cancel
+    </button>
+    <button type="submit" name="amfa_action" value="confirm_codes" id="amfaRegenOk"
+            class="amfa-action-btn amfa-action-btn--apply">
+      <i class="fa fa-check" aria-hidden="true"></i> Confirm new codes
+    </button>
+  </div>
+</div>
 <?php endif; ?>
 <?php if ($amfaBypassUrl !== null): ?>
 <div class="amfa-codes single"><?= $amfaEsc($amfaBypassUrl) ?></div>
@@ -239,17 +334,29 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
   <div class="amfa-sec" id="amfaSecUsers">
     <div class="amfa-sec-hd">
       <span>Account enrolment</span>
-      <span class="amfa-pill">Who is set up for 2FA</span>
+      <span class="amfa-pill">Accounts and their 2FA state</span>
       <span class="amfa-sec-arrow">&#9650;</span>
     </div>
     <div class="amfa-sec-bd">
+      <div class="amfa-users-top">
+        <span class="amfa-r-desc">Accounts come from Unraid. Only the ones that can sign in to the
+          webGUI can use 2FA</span>
+        <button type="submit" name="amfa_action" value="sync_users" class="amfa-action-btn amfa-action-btn--reset">
+          <i class="fa fa-refresh" aria-hidden="true"></i> Sync accounts
+        </button>
+      </div>
 
       <div style="padding:12px 16px;">
       <?php foreach ($amfaSum['users'] as $u): ?>
         <div class="amfa-user-row">
           <div class="amfa-av"><?= $amfaEsc(strtoupper(substr($u['name'], 0, 1))) ?></div>
           <div class="amfa-user-info">
-            <b><?= $amfaEsc($u['name']) ?></b><span class="amfa-badge <?= $amfaEsc($u['status']) ?>"><?=
+            <b><?= $amfaEsc($u['name']) ?></b>
+            <?php if (!$u['seen']): ?>
+            <span class="amfa-badge none">No webGUI sign-in</span>
+            <span>Share access only, 2FA does not apply</span>
+            <?php else: ?>
+            <span class="amfa-badge <?= $amfaEsc($u['status']) ?>"><?=
               $u['status'] === 'none' ? 'None - Not set up for MFA yet' : $amfaEsc(ucfirst($u['status']))
             ?></span>
             <?php if ($u['status'] !== 'none'): ?>
@@ -263,9 +370,10 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
             <?php endif; ?>
             </span>
             <?php endif; ?>
+            <?php endif; ?>
           </div>
           <span class="amfa-user-btns">
-          <?php if ($u['status'] === 'enrolled'): ?>
+          <?php if ($u['seen'] && $u['status'] === 'enrolled'): ?>
             <button type="submit" name="amfa_action" value="bypass" class="amfa-action-btn"
               data-user="<?= $amfaEsc($u['name']) ?>" data-amfa-confirm data-c-icon="fa-link"
               data-c-title="Create a one-time setup link?" data-c-ok="Create link"
@@ -275,19 +383,16 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
             <button type="submit" name="amfa_action" value="regen_codes" class="amfa-action-btn"
               data-user="<?= $amfaEsc($u['name']) ?>" data-amfa-confirm data-c-icon="fa-key"
               data-c-title="Generate new backup codes?" data-c-ok="Generate"
-              data-c-msg="Ten fresh single-use codes for <?= $amfaEsc($u['name']) ?>. The old codes stop working immediately.">
+              data-c-msg="Ten fresh single-use codes for <?= $amfaEsc($u['name']) ?>. Your current codes keep working until you save the new ones and confirm one back.">
               <i class="fa fa-key" aria-hidden="true"></i> New codes
             </button>
-          <?php elseif ($u['status'] === 'locked' || $u['status'] === 'pending'): ?>
+          <?php elseif ($u['seen'] && ($u['status'] === 'locked' || $u['status'] === 'pending')): ?>
             <button type="submit" name="amfa_action" value="bypass" class="amfa-action-btn"
               data-user="<?= $amfaEsc($u['name']) ?>">
               <i class="fa fa-link" aria-hidden="true"></i> Setup link
             </button>
           <?php endif; ?>
-            <button type="submit" name="amfa_action" value="sync_users" class="amfa-action-btn amfa-action-btn--reset">
-              <i class="fa fa-refresh" aria-hidden="true"></i> Sync accounts
-            </button>
-          <?php if ($u['status'] === 'enrolled'): ?>
+          <?php if ($u['seen'] && $u['status'] === 'enrolled'): ?>
             <button type="submit" name="amfa_action" value="reset_user" class="amfa-action-btn amfa-action-btn--reset"
               data-user="<?= $amfaEsc($u['name']) ?>" data-amfa-confirm data-c-danger data-c-icon="fa-undo"
               data-c-title="Reset 2FA for <?= $amfaEsc($u['name']) ?>?" data-c-ok="Reset 2FA"
@@ -306,7 +411,9 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
   <div class="amfa-sec closed" id="amfaSecLan">
     <div class="amfa-sec-hd">
       <span>Trusted LAN</span>
-      <span class="amfa-pill">Networks that skip the prompt</span>
+      <span class="amfa-pill"><?php $amfaLanN = count($amfaSum['trust_lan']);
+        echo $amfaLanN === 0 ? 'Networks that skip the prompt'
+           : ($amfaLanN === 1 ? '1 network skips the prompt' : "$amfaLanN networks skip the prompt"); ?></span>
       <span class="amfa-sec-arrow">&#9650;</span>
     </div>
     <div class="amfa-sec-bd">
@@ -349,6 +456,82 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
     </div>
   </div>
 
+  <div class="amfa-sec closed" id="amfaSecLocks">
+    <div class="amfa-sec-hd">
+      <span>Lockout history</span>
+      <span class="amfa-pill">IPs blocked after failed codes</span>
+      <span class="amfa-sec-arrow">&#9650;</span>
+    </div>
+    <div class="amfa-sec-bd">
+      <div class="amfa-r">
+        <div class="amfa-r-label">Keep history</div>
+        <div class="amfa-r-field">
+          <label class="amfa-toggle">
+            <input type="checkbox" id="amfaHistToggle" <?= $amfaSum['history_on'] ? 'checked' : '' ?>>
+            <span class="amfa-toggle-track"></span>
+          </label>
+          <span class="amfa-r-desc">Locked addresses survive a reboot. Lockout protection itself is
+            unaffected either way, the counters live in RAM. Saved at most every ten minutes, and
+            only when something changed</span>
+        </div>
+      </div>
+
+      <?php if (!$amfaSum['history']): ?>
+      <div class="amfa-r" style="border-bottom:none;">
+        <div class="amfa-r-label">Blocked addresses</div>
+        <div class="amfa-r-field"><span class="amfa-r-desc">No address has been locked out yet.</span></div>
+      </div>
+      <?php else: ?>
+      <table class="amfa-lk">
+        <tr>
+          <th style="width:28%">IP address</th>
+          <th style="width:12%">Failures</th>
+          <th style="width:22%">Locked at</th>
+          <th style="width:12%">Remaining</th>
+          <th></th>
+        </tr>
+        <?php foreach ($amfaSum['history'] as $h): ?>
+        <tr>
+          <td class="amfa-lk-ip"><?= $amfaEsc($h['ip']) ?></td>
+          <td><?= (int)$h['count'] ?></td>
+          <td><?= $amfaEsc(date('Y-m-d H:i', $h['locked_at'])) ?></td>
+          <td>
+            <?php if ($h['remaining'] > 0): ?>
+            <span class="warn"><?= (int)ceil($h['remaining'] / 60) ?> min</span>
+            <?php else: ?>
+            <span class="amfa-lk-done">expired</span>
+            <?php endif; ?>
+          </td>
+          <td class="amfa-lk-act">
+            <?php if ($h['remaining'] > 0): ?>
+            <button type="submit" name="amfa_action" value="unlock_ip" class="amfa-action-btn amfa-action-btn--reset"
+              data-ip="<?= $amfaEsc($h['ip']) ?>" data-amfa-confirm data-c-icon="fa-unlock"
+              data-c-title="Unlock this address?" data-c-ok="Unlock"
+              data-c-msg="<?= $amfaEsc($h['ip']) ?> can try codes again immediately. The row stays in the history.">
+              <i class="fa fa-unlock" aria-hidden="true"></i> Unlock
+            </button>
+            <?php else: ?>
+            <button type="submit" name="amfa_action" value="delete_lock" class="amfa-action-btn"
+              data-ip="<?= $amfaEsc($h['ip']) ?>">
+              <i class="fa fa-trash" aria-hidden="true"></i> Delete
+            </button>
+            <?php endif; ?>
+          </td>
+        </tr>
+        <?php endforeach; ?>
+      </table>
+      <div class="amfa-lk-foot">
+        <span class="amfa-r-desc">One row per address, oldest dropped past 100</span>
+        <button type="submit" name="amfa_action" value="clear_history" class="amfa-action-btn"
+          data-amfa-confirm data-c-icon="fa-trash" data-c-title="Clear expired entries?" data-c-ok="Clear"
+          data-c-msg="Only rows that have served their lock are removed. An address still locked out stays on the list.">
+          <i class="fa fa-trash" aria-hidden="true"></i> Clear history
+        </button>
+      </div>
+      <?php endif; ?>
+    </div>
+  </div>
+
   <div class="amfa-sec closed" id="amfaSecRecovery">
     <div class="amfa-sec-hd">
       <span>Recovery</span>
@@ -360,12 +543,16 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
         <div class="amfa-r-label">Fail-open exits</div>
         <div class="amfa-r-field">
           <span class="amfa-recovery-note">
-            Locked out? From SSH or the local console run <code>aegis-mfa disable</code>.
-            With physical access, create the file <code>/boot/config/plugins/aegis.mfa/DISABLE.flag</code>
-            on the flash drive and reboot. If even the CLI will not run (for example after an Unraid
-            PHP upgrade), run <code>bash /boot/config/plugins/aegis.mfa/recover.sh</code>, a pure-bash
-            script that restores the stock login files with no PHP at all. All three fully disable MFA,
-            and none of them touches your password login.
+            Locked out?<br>
+            Option 1: From a terminal on your PC run <code>ssh root@ip</code> or hostname
+            (e.g. <code>ssh root@tower</code> or <code>ssh root@10.0.0.5</code>), give your root
+            password, then run <code>aegis-mfa disable</code>. A keyboard and monitor on the server
+            does the same. If <code>aegis-mfa</code> is missing or errors out, run<br>
+            <code>bash /boot/config/plugins/aegis.mfa/recover.sh</code><br><br>
+            Option 2: With physical access, shut the server down, take the USB boot drive out and
+            put it in any computer. In <code>config/plugins/aegis.mfa/</code> on the stick create an
+            empty file named <code>DISABLE.flag</code>, put it back and boot. This does not work
+            with an internal boot device, so there use Option 1.
           </span>
         </div>
       </div>
@@ -382,6 +569,9 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
   </div>
   <span class="amfa-version-badge">v<?= $amfaEsc($amfaVer) ?></span>
 </div>
+
+<?php /* last in the form on purpose: an earlier submit button becomes the Enter-key default */ ?>
+<button type="submit" name="amfa_action" value="history_toggle" id="amfaHistSubmit" style="display:none"></button>
 
 </form>
 
@@ -417,7 +607,7 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
       <div class="amfa-credits-right">
         <div class="amfa-credits-title-row">
           <span class="amfa-credits-title">Aegis MFA</span>
-          <span class="amfa-credits-version">v<?= $amfaEsc($amfaVer) ?></span>
+          <span class="amfa-credits-suite">part of AEGIS Suite</span>
         </div>
         <div class="amfa-credits-desc">Two-factor authentication for the Unraid webGUI. TOTP with backup codes, a dry-run window, and fail-open recovery.</div>
         <div class="amfa-credits-links">
@@ -431,7 +621,10 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
       </div>
     </div>
     <div class="amfa-credits-footer">
-      <span class="amfa-credits-copy">Copyright &copy; 2026 Aegis MFA - Lazaros Chalkidis</span>
+      <span class="amfa-credits-foot-stack">
+        <span class="amfa-credits-version">v<?= $amfaEsc($amfaVer) ?></span>
+        <span class="amfa-credits-copy">Copyright &copy; 2026 Aegis MFA - Lazaros Chalkidis</span>
+      </span>
       <button type="button" id="amfaCreditsOkBtn" class="amfa-credits-ok-btn">OK</button>
     </div>
   </div>
@@ -443,14 +636,12 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
 (function () {
     'use strict';
 
-    // collapsible sections
     document.querySelectorAll('.amfa-sec-hd').forEach(function (hd) {
         hd.addEventListener('click', function () {
             hd.parentElement.classList.toggle('closed');
         });
     });
 
-    // credits modal
     var modal = document.getElementById('amfaCreditsModal');
     var cLink = document.getElementById('amfaCreditsLink');
     var okBtn = document.getElementById('amfaCreditsOkBtn');
@@ -461,9 +652,6 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
         document.addEventListener('keydown', function (e) { if (e.key === 'Escape') modal.style.display = 'none'; });
     }
 
-    // confirm dialog. Buttons opt in with data-amfa-confirm and describe
-    // themselves through data-c-* attributes; a confirmed click re-fires
-    // the same button so the native submit keeps its name/value pair.
     var cOvl    = document.getElementById('amfaConfirmModal');
     var cBox    = cOvl ? cOvl.querySelector('.amfa-confirm-box') : null;
     var cTitle  = document.getElementById('amfaConfirmTitle');
@@ -472,14 +660,26 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
     var cOk     = document.getElementById('amfaConfirmOk');
     var cCancel = document.getElementById('amfaConfirmCancel');
     var uField  = document.getElementById('amfaUserField');
+    var ipField = document.getElementById('amfaLockIpField');
+
+    var hTog = document.getElementById('amfaHistToggle');
+    var hOn  = document.getElementById('amfaHistOn');
+    var hSub = document.getElementById('amfaHistSubmit');
+    // the checkbox is not the setting, the hidden button carries the action name the handler switches on
+    if (hTog && hOn && hSub) hTog.addEventListener('change', function () {
+        hOn.value = hTog.checked ? '1' : '0';
+        hSub.click();
+    });
+    // a confirmed click re-fires the same button so the native submit keeps its name/value pair
     var armed   = null;
 
     function cClose() { if (cOvl) cOvl.classList.remove('open'); }
 
-    document.querySelectorAll('button[data-user], button[data-amfa-confirm]').forEach(function (btn) {
+    document.querySelectorAll('button[data-user], button[data-ip], button[data-amfa-confirm]').forEach(function (btn) {
         btn.addEventListener('click', function (e) {
-            // per-row target: one shared hidden field, set at click time
+
             if (uField && btn.hasAttribute('data-user')) uField.value = btn.getAttribute('data-user');
+            if (ipField && btn.hasAttribute('data-ip')) ipField.value = btn.getAttribute('data-ip');
             if (!btn.hasAttribute('data-amfa-confirm') || !cOvl) return;
             if (armed === btn) { armed = null; return; }
             e.preventDefault();
@@ -491,7 +691,7 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
             cOk.textContent    = btn.getAttribute('data-c-ok') || 'OK';
             cOk.onclick = function () { cClose(); armed = btn; btn.click(); };
             cOvl.classList.add('open');
-            // a stray Enter must not fire a destructive action
+
             (danger ? cCancel : cOk).focus();
         });
     });
@@ -501,7 +701,32 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
         document.addEventListener('keydown', function (e) { if (e.key === 'Escape') cClose(); });
     }
 
-    // trusted LAN: one-click add of the admin's own address
+    // a data: href trips unraid's external-link dialog, which shows the codes and opens a tab
+    // instead of saving. a detached anchor never reaches that delegated handler
+    var dlBtn = document.getElementById('amfaCodesDl');
+    if (dlBtn) dlBtn.addEventListener('click', function () {
+        var user = dlBtn.getAttribute('data-user') || 'root';
+        var codes = [].map.call(document.querySelectorAll('.amfa-regen .amfa-codes div'),
+            function (d) { return d.textContent.trim(); });
+        var blob = new Blob(['Aegis MFA backup codes for ' + user + '\n\n' + codes.join('\n') + '\n'],
+            { type: 'text/plain;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'aegis-mfa-backup-codes-' + user + '.txt';
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    });
+
+    var rSaved = document.getElementById('amfaRegenSaved');
+    var rOk    = document.getElementById('amfaRegenOk');
+    // no required attribute, this panel shares the settings form and would block every other save
+    if (rSaved && rOk) {
+        var sync = function () { rOk.disabled = !rSaved.checked; };
+        rSaved.addEventListener('change', sync);
+        sync();
+    }
+
     var myIp  = document.getElementById('amfaMyIpAdd');
     var lanTa = document.getElementById('amfaTrustLan');
     if (myIp && lanTa) myIp.addEventListener('click', function (e) {
@@ -516,4 +741,3 @@ work normally. If you hit any problem, run <code>aegis-mfa disable</code> from S
     });
 })();
 </script>
-

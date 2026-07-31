@@ -1,25 +1,9 @@
 <?php
-/*
- * Aegis MFA for Unraid - enrolment wizard (setup.php)
- * Copyright (C) 2026 Lazaros Chalkidis
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Three steps: 1 scan QR, 2 verify a code, 3 save backup codes and confirm
- * one of them. Enrolment is committed only at the end of step 3.
- *
- * Access rules (a password login is required in ALL cases):
- *  - 'pending', 'locked' and 'none' users may enrol themselves. The gate
- *    lets the wizard URL through (see aegis_mfa_request_is_setup) and the
- *    challenge screen offers "Begin setup".
- *  - an 'enrolled' user may RE-enrol only with a one-time bypass token
- *    (?user=X&token=Y, the lost-authenticator path) or after passing 2FA
- *    in this session. A password alone is never enough to replace an
- *    existing secret; that would make the second factor pointless.
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
 
 require_once '/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaEnroll.php';
 require_once '/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaQr.php';
@@ -28,16 +12,16 @@ aegis_mfa_session_ensure();
 
 $amfaEsc = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
 
-// access always requires a password login. a bypass token does not skip it, it un-expires a locked grace window
 $amfaUser = aegis_mfa_current_user();
 $amfaViaToken = false;
 
+// a password login is required in every path, and an enrolled user also needs a bypass token or 2FA this session
 if ($amfaUser !== '' && isset($_GET['user'], $_GET['token']) && (string)$_GET['user'] === $amfaUser) {
     if (aegis_mfa_consume_bypass_token($amfaUser, (string)$_GET['token'])) {
         $amfaViaToken = true;
-        // the token is single-use but the wizard spans several POSTs, so acceptance is held in session for an hour
+
         $_SESSION['aegis_mfa_token_ok'] = ['user' => $amfaUser, 'until' => time() + 3600];
-        // re-open the grace window so locked clears for this enrolment
+
         aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
             function ($sec) use ($amfaUser) {
                 if (isset($sec['users'][$amfaUser])) {
@@ -52,8 +36,6 @@ if ($amfaUser === '') {
     exit;
 }
 
-// an enrolled user re-enrolling with only the password would be a full 2FA bypass,
-// so that path needs a bypass token or a 2FA-verified session
 $amfaTok = $_SESSION['aegis_mfa_token_ok'] ?? null;
 $amfaTokenOk = $amfaViaToken
     || (is_array($amfaTok)
@@ -63,7 +45,7 @@ $amfaStatus = aegis_mfa_user_status($amfaUser);
 if (!in_array($amfaStatus, ['pending', 'locked', 'none'], true)
     && !$amfaTokenOk
     && !aegis_mfa_session_verified()) {
-    // an enrolled user probing the wizard with only a password is what a stolen credential looks like, leave a trace
+
     @syslog(LOG_WARNING, 'aegis-mfa: setup wizard refused for enrolled user '
         . $amfaUser . ' from ' . aegis_mfa_client_ip());
     header('Location: /');
@@ -73,11 +55,9 @@ if (!in_array($amfaStatus, ['pending', 'locked', 'none'], true)
 $amfaStep  = 1;
 $amfaError = '';
 $amfaCsrf  = aegis_mfa_csrf_token();
-// Unraid's local_prepend.php kills any POST without the webGUI csrf_token from var.ini before we even run.
-// Ours rides in aegis_mfa_csrf, theirs in csrf_token, the prepend consumes theirs, the two never meet
-$amfaVar = @parse_ini_file('/usr/local/emhttp/state/var.ini') ?: [];
-$amfaUnraidCsrf = (string)($amfaVar['csrf_token'] ?? '');
-$amfaHost  = strtok($_SERVER['HTTP_HOST'] ?? 'unraid', ':');
+
+$amfaUnraidCsrf = (string)(aegis_mfa_var_ini()['csrf_token'] ?? '');
+$amfaServer = aegis_mfa_server_name();
 
 $amfaAction = $_POST['aegis_action'] ?? '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !aegis_mfa_csrf_check($_POST['aegis_mfa_csrf'] ?? '')) {
@@ -92,10 +72,9 @@ if ($amfaAction === 'cancel') {
     exit;
 }
 
-// begin or restart on first load or explicit restart
 if ($amfaAction === '' || $amfaAction === 'restart' || aegis_mfa_enroll_state() === null) {
     if ($amfaAction !== 'verify' && $amfaAction !== 'confirm' && $amfaAction !== 'back') {
-        $amfaEnroll = aegis_mfa_begin_enrollment($amfaUser, 'Aegis MFA', $amfaHost);
+        $amfaEnroll = aegis_mfa_begin_enrollment($amfaUser, 'Aegis MFA', $amfaServer);
         $amfaStep = 1;
     }
 }
@@ -104,7 +83,6 @@ if ($amfaAction === 'to_verify') {
     $amfaStep = 2;
 }
 
-// step 2 -> step 1 without touching the pending secret, the scanned QR stays valid. only restart regenerates
 if ($amfaAction === 'back') {
     $amfaStep = 1;
 }
@@ -121,7 +99,7 @@ if ($amfaAction === 'verify') {
 if ($amfaAction === 'confirm') {
     $res = aegis_mfa_commit_enrollment((string)($_POST['backup_confirm'] ?? ''));
     if (($res['ok'] ?? false) === true) {
-        // back through the gate: now enrolled they see the challenge once, or pass straight through on a trusted LAN
+
         unset($_SESSION['aegis_mfa_token_ok']);
         header('Location: /');
         exit;
@@ -138,16 +116,15 @@ if ($amfaAction === 'confirm') {
     }
 }
 
-// state for rendering
 $amfaState = aegis_mfa_enroll_state();
-if ($amfaState === null) {   // safety: restart if session lost mid-wizard
-    $amfaEnroll = aegis_mfa_begin_enrollment($amfaUser, 'Aegis MFA', $amfaHost);
+if ($amfaState === null) {
+    $amfaEnroll = aegis_mfa_begin_enrollment($amfaUser, 'Aegis MFA', $amfaServer);
     $amfaState  = aegis_mfa_enroll_state();
     $amfaStep   = 1;
 }
 $amfaSecret = $amfaState['secret'];
 $amfaCodes  = $amfaState['backup_plain'];
-$amfaUri    = aegis_totp_uri($amfaSecret, $amfaUser . '@' . $amfaHost, 'Aegis MFA');
+$amfaUri    = aegis_totp_uri($amfaSecret, $amfaUser . '@' . $amfaServer, 'Aegis MFA');
 $amfaQrSvg  = aegis_qr_svg(aegis_qr_encode($amfaUri), 5, 4);
 $amfaSecretGrouped = trim(chunk_split($amfaSecret, 4, ' '));
 
@@ -218,11 +195,19 @@ aegis_mfa_shell_open('Aegis MFA setup', $amfaWizCss);
 
 <?php if ($amfaStep === 1): ?>
         <div class="amfa-cols">
+            <?php if ($amfaQrSvg !== ''): ?>
             <div class="amfa-qrbox"><div class="amfa-qr"><?= $amfaQrSvg ?></div></div>
+            <?php endif; ?>
             <div class="amfa-main" style="max-width: none;">
+              <?php if ($amfaQrSvg !== ''): ?>
                 <p class="amfa-lead">Scan with your authenticator app</p>
                 <p class="amfa-sub">Use Google Authenticator, Authy, 1Password, or any TOTP-compatible app.</p>
                 <p class="amfa-label">Or enter this secret manually</p>
+              <?php else: ?>
+                <p class="amfa-lead">Enter this secret in your authenticator app</p>
+                <p class="amfa-sub">The QR code could not be drawn for this account name, so type the
+                   secret instead. Google Authenticator, Authy, 1Password and any other TOTP app take it.</p>
+              <?php endif; ?>
                 <div class="amfa-secret"><?= $amfaEsc($amfaSecretGrouped) ?></div>
             </div>
         </div>

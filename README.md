@@ -1,6 +1,7 @@
 # Aegis MFA for Unraid
 
-Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app. Backup codes, a trusted LAN bypass, and lockout protection. It protects root, the only account the Unraid webGUI accepts.
+Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app. 
+Backup codes, a trusted LAN bypass, and lockout protection. It protects root, the only account the Unraid webGUI accepts.
 
 <p align="center">
   <img src="https://img.shields.io/github/v/release/Lazaros-Chalkidis/unraid-aegis-mfa?label=Latest%20Version&color=blue" style="margin: 4px;" />&nbsp;
@@ -16,26 +17,26 @@ Unraid protects the webGUI with a password and nothing else. The usual answer is
 
 It hooks into the authentication Unraid already has. Every request already passes through an internal gate, and the plugin adds one question to it: this session has the password, has it also passed 2FA? If not, the login page asks for a code instead of sending you to the dashboard. Nothing else about the login changes.
 
-The whole design is built around one rule: a fault must never lock you out. Every failure path in the plugin ends with MFA turning itself off, not with a closed door. There are four independent ways back in even when it is working correctly and you have lost your phone.
+The whole design is built around one rule: a fault must never lock you out. Every failure path in the plugin ends with MFA turning itself off, not with a closed door. There are three independent ways back in even when it is working correctly and you have lost your phone, and a pure-bash floor beneath them for when PHP itself is what broke.
 
 ## Features
 
 - TOTP codes: Works with Google Authenticator, Authy, 1Password, Bitwarden, or any RFC 6238 app. No cloud, no push, no account
-- Root only: On current Unraid, root is the only account the webGUI login accepts, so root is who enrols, with its own secret and its own backup codes. The plugin does not hardcode root, it reads the account list the same way .login.php does, so it stays correct if that ever changes
+- Root only: On current Unraid, root is the only account the webGUI login accepts, so root is who enrols, with its own secret and its own backup codes. The plugin does not hardcode root, it reads the account list the same way .login.php does, so it stays correct if that ever changes. Share users appear in the list marked as having no webGUI sign-in, outside the count and without enrolment buttons
 - Setup wizard: Scan a QR, confirm a code, save your backup codes. The QR is generated on the server, so the secret never leaves the machine
-- Backup codes: Ten single-use codes, shown once. Enrolment does not finish until you type one back, which proves you actually saved them
+- Backup codes: Ten single-use codes, shown once. Enrolment does not finish until you type one back, which proves you actually saved them. Re-issuing them later takes the same path, and the codes you already have keep working until you confirm the new ones
 - Trusted LAN: Skip the code prompt from networks you trust (IPv4 and IPv6 CIDR). The password is still required, and your browser's address is shown ready to add with one click
-- Lockout protection: Too many wrong codes locks the IP out for a while. Counters live in RAM, so a brute-force attempt never wears out your flash drive
+- Lockout protection: Too many wrong codes locks the IP out for a while. Counters live in RAM, so however many addresses a brute-force attempt comes from, none of it reaches the boot device
+- Lockout history: Blocked addresses with their failure count, when they were locked and how long is left, with a button to release one early. Optionally kept across reboots by a snapshot the ten-minute cron writes, and only when something changed
 - Replay protection: A code that has already been used is refused even inside its own 30-second window
-- Dry-run: The first 24 hours after you enable it, the login shows the prompt with a skip link and a failed code is logged but not blocked. Confirm it works before it can ever stop you
+- Dry-run: The first 24 hours after you enable it, the login shows the prompt with a skip link and a failed code is logged but not blocked. Confirm it works before it can ever stop you. It runs once per server: enabling again later goes straight to enforcing, and both the confirmation dialog and the notice say so
 - Grace period: Until root enrols, the login shows a nudge with a skip, for a configurable window before the setup screen becomes mandatory
 - Clock-skew help: A failed code shows the server's own time, which is the usual reason TOTP suddenly stops matching
-- Audit trail: Every success and every failure goes to the syslog with the account and the source IP
+- Audit trail: Every success and every failure goes to the syslog with the account, the source IP and which credential was used, so a backup code stands out from an app code without opening any file
 - Fail-open by design: Corrupt config, a missing file, an Unraid update, an uninstall gone wrong. Every one of them ends with MFA off and password-only login, never with a locked door
 - Self-healing: A boot hook and a ten-minute cron re-apply the login patches if an Unraid update removes them
 - Watchdog alert: An Unraid notification fires if MFA is on but the login patches are missing, and once more when protection returns
-- Untested-release notice: The settings page warns when your Unraid release has not been tested with the plugin yet
-- Four ways back in: Backup codes, `aegis-mfa disable` over SSH, a `DISABLE.flag` file on the flash drive, or the pure-bash `recover.sh` next to it
+- Ways back in: Backup codes, `aegis-mfa disable` over SSH or the local console, the pure-bash `recover.sh` for when even that will not run, and a `DISABLE.flag` file on a USB boot drive
 
 **GUI Widget Screenshot**
 
@@ -56,17 +57,17 @@ This is the part that matters, so it comes before everything else.
 
 **You still have a backup code.** Enter it on the code prompt instead of the 6-digit code. Each one works once.
 
-**You have SSH or the local console.** Run `aegis-mfa disable`. MFA turns off, the login patches are removed, and password-only login is back. Nothing else is touched, and your enrolments are still there when you turn it back on.
+**You have SSH or the local console.** MFA guards the webGUI only, so SSH still takes just your password: from any computer run `ssh root@tower`, or your server's IP, then `aegis-mfa disable`. A keyboard and monitor on the server does the same. MFA turns off, the login patches are removed, and password-only login is back. Nothing else is touched, and your enrolments are still there when you turn it back on.
 
-**You have physical access to the server.** Put the flash drive in any computer and create an empty file at `config/plugins/aegis.mfa/DISABLE.flag`. On the next boot MFA is off. This one needs nothing but your hands.
+**You have physical access and boot from USB.** Shut the server down, put the flash drive in any computer and create an empty file at `config/plugins/aegis.mfa/DISABLE.flag`. On the next boot MFA is off. This one needs nothing but your hands. It does not apply to internal boot, where the boot device is ZFS and will not mount on a desktop; there the console is the way in.
 
-**Even the CLI will not run.** After an Unraid PHP upgrade, in the rare case a plugin file no longer parses, run `bash /boot/config/plugins/aegis.mfa/recover.sh`. It is pure bash with no PHP dependency: it restores the two Unraid login files to stock (from the backups it keeps, or by stripping its own hook if the backups are gone) and sets the disable flag. Your enrolments are left untouched.
+**Even the CLI will not run.** After an Unraid PHP upgrade, in the rare case a plugin file no longer parses, run `bash /boot/config/plugins/aegis.mfa/recover.sh` from that same SSH session or console. It is pure bash with no PHP dependency: it restores the two Unraid login files to stock (from the backups it keeps, or by stripping its own hook if the backups are gone) and sets the disable flag. Your enrolments are left untouched.
 
-The first three are the everyday paths; the bash script is the floor beneath them, for the one scenario where PHP itself is the thing that broke.
+The backup code and `aegis-mfa disable` are the everyday paths, the flag on the flash covers a server you can touch but not log into, and the bash script is the floor beneath the CLI, for the one scenario where PHP itself is the thing that broke.
 
 ## Scope and limits
 
-Aegis MFA guards the webGUI login and nothing else. SSH, SMB, NFS, and Docker containers are not affected: they never went through the webGUI login in the first place. It is TOTP only, so no push notifications, no SMS, no hardware keys. Secrets and backup codes are stored on the flash drive, so anyone who can take the flash drive out of the server can read them, which is also true of the passwords already stored there. The trusted LAN bypass is exactly what it says: a request from a trusted subnet skips the code, so it is only as safe as the network you name.
+Aegis MFA guards the webGUI login and nothing else. SSH, SMB, NFS, and Docker containers are not affected: they never went through the webGUI login in the first place. It is TOTP only, so no push notifications, no SMS, no hardware keys. Secrets and backup codes are stored on the boot device, so anyone who can read that device outside the server can read them, which is also true of the passwords already stored there. The trusted LAN bypass is exactly what it says: a request from a trusted subnet skips the code, so it is only as safe as the network you name.
 
 ## Requirements
 
@@ -91,6 +92,25 @@ The plugin refuses to install below 7.3.1, deliberately. It patches the login pa
 
 After installing, open Settings > Aegis MFA. MFA is off until you turn it on.
 
+## Uninstalling
+
+Removing the plugin restores the two Unraid login files to stock, turns the saved switch off and
+takes its own files with it: the package, `recover.sh`, `DISABLE.flag` and the lockout history.
+
+Your settings and your 2FA enrolments are left in place, because removing a plugin in Unraid is one
+click with no confirmation and is more often a reinstall than a goodbye. A reinstall picks them up,
+with MFA switched off until you turn it back on:
+
+```
+/boot/config/plugins/aegis.mfa/
+```
+
+To erase them instead, including the TOTP secrets and the backup codes, remove that folder yourself:
+
+```
+rm -rf /boot/config/plugins/aegis.mfa
+```
+
 ## First run
 
 1. Open Settings > Aegis MFA and click **Enable MFA**. This starts a 24-hour dry-run: codes are checked and failures are logged, but nothing is blocked yet
@@ -106,10 +126,13 @@ The dry-run exists so that a clock problem, a mistyped secret, or an unexpected 
 
 - Enable / Disable: The master switch. Disabling removes the login patches immediately
 - Enforce now: End the 24-hour dry-run early, once you have confirmed it works
-- Trusted LAN: Networks that skip the code prompt, one CIDR or IP per line, IPv4 and IPv6. The password is still required
-- Grace period: How many days root has to enrol after the first sync before the setup screen becomes mandatory
-- Account row: New backup codes, a 2FA reset, or a one-time setup link for when the authenticator is lost
+- Trusted LAN: Networks that skip the code prompt, one CIDR or IP per line, IPv4 and IPv6. The password is still required. When the address you are on is on the list, the page says so at the top, since an exempt browser otherwise looks identical to a protected one
+- Grace period: How many days root has to enrol after the first sync before the setup screen becomes mandatory. Two by default, and worth keeping short: while the window is open, anyone with the password can reach the wizard, so enrol as soon as you turn MFA on
+- Lockout history: Blocked addresses, with Unlock to release one now, Delete for a spent entry and Clear for every expired one. The Keep history switch controls whether they survive a reboot, nothing else
+- Account row: New backup codes, a 2FA reset, or a one-time setup link for when the authenticator is lost. Accounts that cannot sign in to the webGUI have none of these
 - Sync accounts: Reconcile the enrolment list against Unraid's own account list. Runs on its own at boot and every ten minutes
+
+The settings page is behind the code prompt like every other page. It carries the Disable button, so a session that has only passed the password does not reach it. If you are locked out, use one of the ways back in described above, none of which goes through the webGUI.
 
 **Settings Page**
 
@@ -136,7 +159,7 @@ Before either file is touched, its structure is checked: the insertion point mus
 
 The patches are re-applied by two independent mechanisms: an event hook at boot and a cron entry every ten minutes. If an Unraid update replaces the login files, the patch is restored automatically. If it replaces them with something we do not recognise, the surviving patch is removed too, so the login is never left half-wired.
 
-Codes are standard TOTP (RFC 6238, SHA1, 6 digits, 30 seconds) with a one-step window either side, which tolerates about thirty seconds of clock drift. A code is compared in constant time, and the step it matched is recorded, so the same code cannot be used twice. Backup codes are bcrypt-hashed and single-use. Secrets and backup codes live on the flash drive; the lockout counters live in RAM so a brute-force attempt never writes to the flash.
+Codes are standard TOTP (RFC 6238, SHA1, 6 digits, 30 seconds) with a one-step window either side, which tolerates about thirty seconds of clock drift. A code is compared in constant time, and the step it matched is recorded, so the same code cannot be used twice. Backup codes are bcrypt-hashed and single-use. Secrets and backup codes live on the boot device. The lockout counters live in RAM, so the request path never writes to the boot device at all; the lockout history, when you keep it, is a snapshot the ten-minute cron writes, and only when the set has actually changed.
 
 ## Development
 
@@ -180,7 +203,7 @@ unraid-aegis-mfa/
 │   ├── scripts/
 │   │   ├── aegis-mfa             the CLI, symlinked to /usr/local/sbin
 │   │   ├── aegis-mfa-cron        the ten-minute consistency check
-│   │   └── aegis-mfa-recover.sh  pure-bash recovery, copied to the flash on install
+│   │   └── aegis-mfa-recover.sh  pure-bash recovery, copied to the boot device on install
 │   ├── event/
 │   │   └── started               boot hook, re-applies the patches
 │   ├── images/                   avatar.png only, the plugin mark is inline SVG
@@ -188,14 +211,13 @@ unraid-aegis-mfa/
 │   ├── AegisMfaIcon.page         defines the icon class for the Plugins page
 │   ├── challenge.view.php        the code prompt
 │   ├── aegis-mfa.css             the settings page stylesheet
-│   ├── config.default.json       defaults, copied to the flash on first install
+│   ├── config.default.json       defaults, copied to the boot device on first install
 │   ├── README.md                 the short text on the Plugins page
 │   └── aegis.mfa.cron
 ├── tests/
 ├── screenshots/
 ├── build.sh
 ├── CHANGELOG.md
-├── compat.json                   tested-release checksums, shipped with the package
 ├── ca_profile.xml
 ├── aegis.mfa.xml
 ├── aegismfaplugin.svg            the CA catalog icon

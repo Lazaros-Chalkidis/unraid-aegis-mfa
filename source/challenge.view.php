@@ -1,43 +1,34 @@
 <?php
-/*
- * Aegis MFA for Unraid - 2FA challenge page
- * Copyright (C) 2026 Lazaros Chalkidis
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Included from the patched .login.php when a logged-in user still needs
- * 2FA. Renders the code prompt and handles its own POST. On success the
- * session is marked verified and we redirect to the start page; the gate
- * then returns 200 everywhere.
- *
- * Runs inside .login.php scope: session already started, $start_page set.
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
 
 require_once '/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaEnroll.php';
+
+// reached through the 401 redirect, so a background request lands here too
+if (!aegis_mfa_request_wants_page()) {
+    http_response_code(401);
+    exit;
+}
 
 $amfaUser  = aegis_mfa_current_user();
 $amfaError = '';
 $amfaLockSeconds = 0;
-// leading slashes stripped: Location //host is protocol-relative, an open redirect. costs nothing
-$amfaStart = isset($start_page) && is_string($start_page) ? $start_page : 'Dashboard';
-$amfaStart = preg_replace('#^[/\\\\]+#', '', $amfaStart);
 
-// user status decides which screen this really is
+$amfaStart = isset($start_page) && is_string($start_page) ? $start_page : 'Dashboard';
+$amfaStart = preg_replace('#^[/\\\\]+#', '', $amfaStart);  // runs inside .login.php scope, session already open and $start_page set
+
 $amfaStatus = aegis_mfa_user_status($amfaUser);
 $amfaDry    = !aegis_mfa_enforcing();
 
-// grace deadline, shown on the pending screen
 $amfaGrace = 0;
 if ($amfaStatus === 'pending') {
     $amfaSec   = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
     $amfaGrace = (int)($amfaSec['users'][$amfaUser]['grace_until'] ?? 0);
 }
 
-// explicit skip, legitimate only while the prompt is optional (grace running or dry-run). sets the once-per-session
-// flag and never grants 2FA, which is why a GET is acceptable. everyone else falls through to their prompt
 if (isset($_GET['aegis_mfa_skip']) && ($amfaDry || $amfaStatus === 'pending')) {
     aegis_mfa_mark_nudged($amfaUser);
     header('Location: /' . $amfaStart);
@@ -125,13 +116,17 @@ if ($amfaStatus === 'pending' || $amfaStatus === 'locked') {
 <?php
 }
 
-// the Recovery section's fail-open exits, readable right where a locked-out admin stands
-$amfaLockedTip = 'From SSH or the local console run <code>aegis-mfa disable</code>. '
-    . 'With physical access, create the file <code>/boot/config/plugins/aegis.mfa/DISABLE.flag</code> '
-    . 'on the flash drive and reboot. If even the CLI will not run (for example after an Unraid '
-    . 'PHP upgrade), run <code>bash /boot/config/plugins/aegis.mfa/recover.sh</code>, a pure-bash '
-    . 'script that restores the stock login files with no PHP at all. All three fully disable MFA, '
-    . 'and none of them touches your password login.';
+aegis_mfa_mark_seen($amfaUser);
+
+$amfaLockedTip = 'Option 1: From a terminal on your PC run <code>ssh root@ip</code> or hostname '
+    . '(e.g. <code>ssh root@tower</code> or <code>ssh root@10.0.0.5</code>), give your root password, '
+    . 'then run <code>aegis-mfa disable</code>. A keyboard and monitor on the server does the same. '
+    . 'If <code>aegis-mfa</code> is missing or errors out, run<br>'
+    . '<code>bash /boot/config/plugins/aegis.mfa/recover.sh</code><br>'
+    . 'Option 2: With physical access, shut the server down, take the USB boot drive out and put it '
+    . 'in any computer. In <code>config/plugins/aegis.mfa/</code> on the stick create an empty file '
+    . 'named <code>DISABLE.flag</code>, put it back and boot. This does not work with an internal '
+    . 'boot device, so there use Option 1.';
 
 aegis_mfa_shell_close('<a href="/logout">Sign out</a>'
     . '<span class="amfa-lockout" tabindex="0">Locked Out?'

@@ -1,6 +1,12 @@
 #!/bin/bash
-# Aegis MFA - last-resort recovery, pure bash, no PHP.
-# For when the login is broken and even aegis-mfa disable will not run.
+# ============================================================================
+# AEGIS MFA
+# Copyright (C) 2026 Lazaros Chalkidis
+# License: GPLv3
+# =========================================================================
+
+# last-resort recovery, pure bash, no PHP.
+# for when the login is broken and even aegis-mfa disable will not run.
 #
 #   bash /boot/config/plugins/aegis.mfa/recover.sh
 #

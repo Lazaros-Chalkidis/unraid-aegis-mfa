@@ -1,12 +1,14 @@
 <?php
-/*
- * Aegis MFA - helpers test suite
- * run: php tests/helpers.test.php
- * exit 0 on full pass, 1 on any failure
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
 
-// worker mode: used by the concurrency test below. two of these run in
-// parallel and hammer the same counter through aegis_mfa_update_json.
+require_once __DIR__ . '/strict.php';
+
+// locking, config merge, user sync, lockouts. run: php tests/helpers.test.php
+
 if (($argv[1] ?? '') === 'worker') {
     define('AEGIS_MFA_FLASH_DIR', $argv[2]);
     define('AEGIS_MFA_STATE_DIR', $argv[2]);
@@ -35,7 +37,6 @@ function t(string $name, bool $ok): void {
     echo "FAIL  $name\n";
 }
 
-// json i/o
 $f = AEGIS_MFA_FLASH_DIR . '/t.json';
 t('read missing',      aegis_mfa_read_json($f) === null);
 t('write ok',          aegis_mfa_write_json($f, ['a' => 1]) === true);
@@ -50,7 +51,6 @@ t('write bad dir',     aegis_mfa_write_json('/proc/nope/x.json', ['a' => 1]) ===
 $perm = fileperms($f) & 0777;
 t('mode 0600',         $perm === 0600);
 
-// concurrency: two workers, 200 increments each, no lost updates
 $cdir = $work . '/conc';
 @mkdir($cdir, 0700, true);
 $cmd = PHP_BINARY . ' ' . escapeshellarg(__FILE__) . ' worker ' . escapeshellarg($cdir) . ' 200';
@@ -61,10 +61,17 @@ pclose($p2);
 $counter = aegis_mfa_read_json($cdir . '/counter.json');
 t('flock no lost updates (400)', ($counter['n'] ?? 0) === 400);
 
-// config
 $cfg = aegis_mfa_config(true);
 t('cfg default disabled',  $cfg['enabled'] === false);
 t('cfg default lockout',   $cfg['lockout']['threshold'] === 5);
+t('cfg default grace',     $cfg['grace_period_days'] === 2);
+t('cfg default history',   $cfg['lockout_history'] === true);
+
+// the shipped file and the code defaults have to agree, or a fresh install differs from an upgrade
+$shipped = json_decode((string)@file_get_contents(__DIR__ . '/../source/config.default.json'), true);
+t('shipped grace matches',   ($shipped['grace_period_days'] ?? null) === $cfg['grace_period_days']);
+t('shipped history matches', ($shipped['lockout_history'] ?? null) === $cfg['lockout_history']);
+t('shipped lockout matches', ($shipped['lockout'] ?? null) === $cfg['lockout']);
 aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/config.json',
     ['enabled' => true, 'lockout' => ['threshold' => 3]]);
 $cfg = aegis_mfa_config(true);
@@ -78,7 +85,6 @@ t('DISABLE.flag wins',     aegis_mfa_enabled() === false);
 unlink(AEGIS_MFA_FLASH_DIR . '/DISABLE.flag');
 t('flag removed',          aegis_mfa_enabled() === true);
 
-// dry-run window
 aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/config.json',
     ['enabled' => true, 'enforce_after' => 1000]);
 aegis_mfa_config(true);
@@ -86,7 +92,6 @@ t('dry-run before',        aegis_mfa_enforcing(999) === false);
 t('enforcing at',          aegis_mfa_enforcing(1000) === true);
 t('enforcing after',       aegis_mfa_enforcing(2000) === true);
 
-// cidr
 t('v4 in /24',        aegis_mfa_cidr_match('10.0.0.5', '10.0.0.0/24') === true);
 t('v4 out /24',       aegis_mfa_cidr_match('10.0.1.5', '10.0.0.0/24') === false);
 t('v4 edge .255',     aegis_mfa_cidr_match('10.0.0.255', '10.0.0.0/24') === true);
@@ -115,7 +120,6 @@ t('trusted miss',  aegis_mfa_ip_trusted('8.8.8.8', ['192.168.0.0/16', '10.0.0.0/
 t('trusted empty', aegis_mfa_ip_trusted('10.0.0.9', []) === false);
 t('trusted junk',  aegis_mfa_ip_trusted('10.0.0.9', [42, null, '10.0.0.0/24']) === true);
 
-// client ip / xff
 aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/config.json', ['enabled' => true]);
 aegis_mfa_config(true);
 $_SERVER['REMOTE_ADDR'] = '203.0.113.7';
@@ -132,7 +136,6 @@ $_SERVER['HTTP_X_FORWARDED_FOR'] = '198.51.100.1';
 t('xff from non-proxy ignored', aegis_mfa_client_ip() === '10.0.0.99');
 unset($_SERVER['HTTP_X_FORWARDED_FOR']);
 
-// session
 t('session ensure',      aegis_mfa_session_ensure() === true);
 t('session name',        aegis_mfa_session_name() === (ini_get('session.name') ?: 'PHPSESSID'));
 t('no unraid session',   aegis_mfa_has_unraid_session() === false);
@@ -150,13 +153,11 @@ t('verified now',        aegis_mfa_session_verified() === true);
 t('namespace intact',    $_SESSION['aegis_mfa']['user'] === 'root');
 t('unraid keys intact',  $_SESSION['unraid_user'] === 'root');
 
-// user switch inside the same session must drop the verification
 $_SESSION['unraid_user'] = 'lazaros';
 t('switch invalidates',  aegis_mfa_session_verified() === false);
 t('mark explicit user',  aegis_mfa_mark_verified('lazaros') === true);
 t('verified as new',     aegis_mfa_session_verified() === true);
 
-// nudge flag: same shape and same switch guard as the verified flag
 unset($_SESSION['aegis_mfa']);
 $_SESSION['unraid_user'] = '';
 t('nudge fails no user',  aegis_mfa_mark_nudged() === false);
@@ -166,23 +167,17 @@ t('mark nudged',          aegis_mfa_mark_nudged() === true);
 t('nudged now',           aegis_mfa_session_nudged() === true);
 t('nudge not verified',   aegis_mfa_session_verified() === false);
 
-// verifying after the nudge keeps the flags independent in the gate's
-// eyes: verified wins, and the nudge merge never wipes a verification
 t('verify after nudge',   aegis_mfa_mark_verified('root') === true);
 t('re-nudge keeps verify', aegis_mfa_mark_nudged('root') === true
                            && aegis_mfa_session_verified() === true
                            && aegis_mfa_session_nudged() === true);
 
-// switch drops the nudge with the rest of the namespace
 $_SESSION['unraid_user'] = 'lazaros';
 t('switch drops nudge',   aegis_mfa_session_nudged() === false);
 t('nudge fresh user',     aegis_mfa_mark_nudged('lazaros') === true
                            && aegis_mfa_session_nudged() === true
                            && aegis_mfa_session_verified() === false);
 
-// navigation detector: the nudge bounces page loads, never background
-// traffic. Fetch Metadata decides when present, Accept when it is not,
-// and anything ambiguous passes.
 $_SERVER['REQUEST_METHOD'] = 'GET';
 $_SERVER['HTTP_SEC_FETCH_DEST'] = 'document';
 unset($_SERVER['HTTP_ACCEPT']);
@@ -203,7 +198,6 @@ $_SERVER['HTTP_SEC_FETCH_DEST'] = 'document';
 t('nav: post not nav',     aegis_mfa_request_is_navigation() === false);
 unset($_SERVER['REQUEST_METHOD'], $_SERVER['HTTP_SEC_FETCH_DEST']);
 
-// user status / secrets
 $sec = [
     'version' => 1,
     'users' => [
@@ -231,13 +225,13 @@ t('last step read',        aegis_mfa_get_last_step('root') === 100);
 t('last step default',     aegis_mfa_get_last_step('media') === 0);
 t('last step advance',     aegis_mfa_set_last_step('root', 150) === true);
 t('last step advanced',    aegis_mfa_get_last_step('root') === 150);
-aegis_mfa_set_last_step('root', 120);
+t('last step replay false', aegis_mfa_set_last_step('root', 150) === false);
+t('last step regress false', aegis_mfa_set_last_step('root', 120) === false);
 t('last step no regress',  aegis_mfa_get_last_step('root') === 150);
-aegis_mfa_set_last_step('ghost', 99);
+t('last step ghost false', aegis_mfa_set_last_step('ghost', 99) === false);
 $ghost = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json')['users']['ghost'] ?? null;
 t('last step ghost noop',  $ghost === null);
 
-// lockout
 aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/config.json',
     ['enabled' => true, 'lockout' => ['threshold' => 3, 'window_seconds' => 100, 'lock_seconds' => 60]]);
 aegis_mfa_config(true);
@@ -252,29 +246,23 @@ t('locked now',            aegis_mfa_is_locked($ip, 1020) === true);
 t('locked within period',  aegis_mfa_is_locked($ip, 1079) === true);
 t('unlocks after period',  aegis_mfa_is_locked($ip, 1081) === false);
 
-// window reset: an old first_at starts a fresh window
 $ip2 = '198.51.100.7';
 aegis_mfa_record_failure($ip2, 'media', 1000);
 aegis_mfa_record_failure($ip2, 'media', 1010);
 t('window resets count',   aegis_mfa_record_failure($ip2, 'media', 1200) === 2);
 
-// clear
 aegis_mfa_clear_failures($ip);
 t('cleared unlocks',       aegis_mfa_is_locked($ip, 1020) === false);
 
-// prune: expired window entries vanish, active locks stay
-aegis_mfa_record_failure('192.0.2.1', 'x', 1000);          // stale after window
-aegis_mfa_record_failure('192.0.2.2', 'x', 5000);          // fresh
-for ($i = 0; $i < 3; $i++) aegis_mfa_record_failure('192.0.2.3', 'x', 5000);  // locked
+aegis_mfa_record_failure('192.0.2.1', 'x', 1000);
+aegis_mfa_record_failure('192.0.2.2', 'x', 5000);
+for ($i = 0; $i < 3; $i++) aegis_mfa_record_failure('192.0.2.3', 'x', 5000);
 aegis_mfa_prune_lockouts(5050);
 $d = aegis_mfa_read_json(aegis_mfa_lockout_path());
 t('prune drops stale',     !isset($d['failures']['192.0.2.1']));
 t('prune keeps fresh',     isset($d['failures']['192.0.2.2']));
 t('prune keeps locked',    isset($d['failures']['192.0.2.3']));
 
-// user enumeration / sync (injected getent fixtures)
-// fixture mirroring a real Unraid box: root + two web users, plus system
-// accounts and locked accounts that must be excluded.
 $fixture = function (string $db): array {
     if ($db === 'passwd') return [
         'root:x:0:0::/root:/bin/bash',
@@ -307,7 +295,6 @@ t('enum excludes locked',  !in_array('locked', $users, true));
 t('enum excludes nopass',  !in_array('nopass', $users, true));
 t('enum exact set',        $users === ['lazaros', 'media', 'root']);
 
-// sync onto an empty secrets store: all live users become pending
 @unlink(AEGIS_MFA_FLASH_DIR . '/secrets.json');
 aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/config.json',
     ['enabled' => true, 'grace_period_days' => 7]);
@@ -321,11 +308,9 @@ t('sync root pending',     aegis_mfa_user_status('root', 1000) === 'pending');
 $secNow = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
 t('sync grace set',        $secNow['users']['root']['grace_until'] === 1000 + 7 * 86400);
 
-// second run is idempotent: nothing added or removed
 $r2 = aegis_mfa_sync_users($fixture, 2000);
 t('sync idempotent',       $r2['added'] === [] && $r2['removed'] === []);
 
-// an enrolled user is left untouched by sync
 aegis_mfa_update_json(AEGIS_MFA_FLASH_DIR . '/secrets.json', function ($s) {
     $s['users']['root'] = ['status' => 'enrolled', 'secret' => 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'];
     return $s;
@@ -333,7 +318,6 @@ aegis_mfa_update_json(AEGIS_MFA_FLASH_DIR . '/secrets.json', function ($s) {
 aegis_mfa_sync_users($fixture, 3000);
 t('sync keeps enrolled',   aegis_mfa_user_status('root', 3000) === 'enrolled');
 
-// a user removed from the system is dropped from secrets
 $smaller = function (string $db) use ($fixture): array {
     return array_values(array_filter($fixture($db), fn($l) => strpos($l, 'media:') !== 0));
 };
@@ -342,8 +326,6 @@ t('sync drops removed',    $r3['removed'] === ['media']);
 t('removed user gone',     aegis_mfa_user_status('media', 4000) === 'none');
 t('other users survive',   aegis_mfa_user_status('root', 4000) === 'enrolled');
 
-// an empty account read never wipes enrolments: treated as a failed read,
-// because root always exists on a box where webGUI login works at all
 $empty = function (string $db): array { return []; };
 $syncBefore = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
 $rg = aegis_mfa_sync_users($empty, 5000);
@@ -352,15 +334,12 @@ t('sync empty removed none',   $rg['removed'] === [] && $rg['added'] === []);
 t('sync empty file untouched', aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json') === $syncBefore);
 t('sync empty root survives',  aegis_mfa_user_status('root', 5000) === 'enrolled');
 
-// an ENROLLED user missing from the live list must NOT be deleted: a
-// background sync must never destroy real setup effort. This is the
-// "Synced. removed: 1" that wiped an enrolled root on live hardware.
 aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/secrets.json', ['version' => 1, 'users' => [
     'root'  => ['status' => 'enrolled', 'secret' => 'S', 'backup_codes' => ['a'], 'backup_codes_used' => []],
     'ghost' => ['status' => 'pending', 'grace_until' => 9999999999],
 ]]);
 $listNoRoot = function (string $db): array {
-    // shadow + passwd for a single non-root user; root absent from both
+
     if ($db === 'shadow') return ['alice:$6$x'];
     if ($db === 'passwd') return ['alice:x:1000:1000::/home/alice:/bin/bash'];
     return [];
@@ -371,8 +350,6 @@ t('no-root list keeps enrolled root', aegis_mfa_user_status('root', 6000) === 'e
 t('no-root list keeps pending ghost too', isset(aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json')['users']['ghost']));
 t('no-root list still adds alice', in_array('alice', $rr['added'], true));
 
-// a trustworthy list (root present) prunes a stale PENDING user but still
-// spares an enrolled one that is absent
 aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/secrets.json', ['version' => 1, 'users' => [
     'root'    => ['status' => 'enrolled', 'secret' => 'S', 'backup_codes' => ['a'], 'backup_codes_used' => []],
     'oldpend' => ['status' => 'pending', 'grace_until' => 9999999999],
@@ -389,9 +366,152 @@ t('trusted list spares absent enrolled', aegis_mfa_user_status('oldenr', 7000) =
 t('trusted list reports kept', in_array('oldenr', $rp['kept'] ?? [], true));
 t('trusted list keeps root', aegis_mfa_user_status('root', 7000) === 'enrolled');
 
-// summary
+// lockout history
+aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/config.json',
+    ['lockout' => ['threshold' => 3, 'window_seconds' => 300, 'lock_seconds' => 900],
+     'lockout_history' => true]);
+aegis_mfa_config(true);
+@unlink(aegis_mfa_lockout_path());
+@unlink(aegis_mfa_history_path());
+
+t('history default is on', aegis_mfa_config(true)['lockout_history'] === true);
+
+for ($i = 0; $i < 2; $i++) aegis_mfa_record_failure('10.0.0.9', 'root', 1000);
+t('no history below threshold', aegis_mfa_history_ram() === []);
+aegis_mfa_record_failure('10.0.0.9', 'root', 1000);
+$hr = aegis_mfa_history_ram();
+t('lock writes one ram row', count($hr) === 1 && isset($hr['10.0.0.9']));
+t('ram row keeps the account', ($hr['10.0.0.9']['username'] ?? '') === 'root');
+t('lock does not touch the flash', !is_file(aegis_mfa_history_path()));
+
+$hist = aegis_mfa_lockout_history(1000);
+t('history reports remaining', $hist[0]['remaining'] === 900);
+t('history reports the count', $hist[0]['count'] === 3);
+t('history expires with the lock', aegis_mfa_lockout_history(9000)[0]['remaining'] === 0);
+
+t('flush writes the snapshot', aegis_mfa_flush_lockout_history() === true);
+t('snapshot landed on the flash', count(aegis_mfa_history_disk()) === 1);
+t('second flush is a no-op', aegis_mfa_flush_lockout_history() === false);
+
+for ($i = 0; $i < 3; $i++) aegis_mfa_record_failure('10.0.0.9', 'root', 5000);
+t('relock updates the same row', count(aegis_mfa_history_ram()) === 1);
+t('relock moves locked_at', aegis_mfa_history_ram()['10.0.0.9']['locked_at'] === 5000);
+t('changed set flushes again', aegis_mfa_flush_lockout_history() === true);
+
+aegis_mfa_update_json(AEGIS_MFA_FLASH_DIR . '/config.json',
+    function ($c) { $c['lockout_history'] = false; return $c; });
+aegis_mfa_config(true);
+for ($i = 0; $i < 3; $i++) aegis_mfa_record_failure('10.0.0.11', 'root', 6000);
+t('flush refused when off', aegis_mfa_flush_lockout_history() === false);
+t('ram still records when off', count(aegis_mfa_history_ram()) === 2);
+t('history visible when off', count(aegis_mfa_lockout_history(6000)) === 2);
+aegis_mfa_update_json(AEGIS_MFA_FLASH_DIR . '/config.json',
+    function ($c) { $c['lockout_history'] = true; return $c; });
+aegis_mfa_config(true);
+
+t('forget rejects junk', aegis_mfa_forget_lockout('not-an-ip') === false);
+t('forget rejects a path', aegis_mfa_forget_lockout('../../etc/passwd') === false);
+aegis_mfa_forget_lockout('10.0.0.11');
+t('forget drops the row', !isset(aegis_mfa_history_ram()['10.0.0.11']));
+t('forget clears the counter', !aegis_mfa_is_locked('10.0.0.11', 6000));
+
+for ($i = 0; $i < 3; $i++) aegis_mfa_record_failure('10.0.0.12', 'root', 9000);
+aegis_mfa_flush_lockout_history();
+t('clear keeps a live lock', aegis_mfa_clear_lockout_history(9100) === 1);
+$left = aegis_mfa_lockout_history(9100);
+t('clear left the live row', count($left) === 1 && $left[0]['ip'] === '10.0.0.12');
+t('clear pruned the flash copy', count(aegis_mfa_history_disk()) === 1);
+
+$many = [];
+for ($i = 0; $i < 130; $i++) $many["10.1.0.$i"] = ['locked_at' => 1000 + $i, 'locked_until' => 0];
+$capped = aegis_mfa_history_trim($many);
+t('cap holds at 100', count($capped) === 100);
+t('cap keeps the newest', isset($capped['10.1.0.129']) && !isset($capped['10.1.0.0']));
+t('trim sorts newest first', array_key_first($capped) === '10.1.0.129');
+
+// failures map is bounded too, or a flood grows the tmpfs file without limit
+@unlink(aegis_mfa_lockout_path());
+aegis_mfa_update_json(aegis_mfa_lockout_path(), function ($d) {
+    for ($i = 0; $i < aegis_mfa_failures_max(); $i++) {
+        $d['failures']["10.2." . intdiv($i, 256) . "." . ($i % 256)] =
+            ['count' => 1, 'first_at' => 100, 'last_at' => 100 + $i];
+    }
+    return $d;
+});
+aegis_mfa_record_failure('10.9.9.9', 'root', 99999);
+$fl = aegis_mfa_read_json(aegis_mfa_lockout_path())['failures'];
+t('failures capped', count($fl) === aegis_mfa_failures_max());
+t('failures keep the newest', isset($fl['10.9.9.9']));
+t('failures drop the oldest', !isset($fl['10.2.0.0']));
+
+t('server name never empty', aegis_mfa_server_name() !== '');
+
+// the challenge page renders for browsers asking for a page, never for a poller
+$keep = $_SERVER;
+foreach ([
+    ['document', null, 'GET',  true,  'navigation'],
+    ['document', null, 'POST', true,  'form post'],
+    ['empty',    null, 'GET',  false, 'xhr'],
+    ['script',   null, 'GET',  false, 'script tag'],
+    ['image',    null, 'GET',  false, 'image'],
+    [null, 'text/html,application/xhtml+xml', 'GET', true,  'old browser, html accept'],
+    [null, 'application/json',                'GET', false, 'old client, json accept'],
+    [null, '',                                'GET', true,  'no headers at all'],
+] as [$dest, $accept, $method, $want, $label]) {
+    $_SERVER = ['REQUEST_METHOD' => $method];
+    if ($dest !== null)   $_SERVER['HTTP_SEC_FETCH_DEST'] = $dest;
+    if ($accept !== null) $_SERVER['HTTP_ACCEPT'] = $accept;
+    t("wants page: $label", aegis_mfa_request_wants_page() === $want);
+}
+$_SERVER = $keep;
+
+// the history file lives on the flash and can come back truncated or half-written
+foreach ([
+    'scalar rows'   => ['version' => 1, 'entries' => ['1.1.1.1' => 'x', '2.2.2.2' => 'y']],
+    'entries scalar'=> ['version' => 1, 'entries' => 'nonsense'],
+    'no entries'    => ['version' => 1],
+    'null row'      => ['version' => 1, 'entries' => ['1.1.1.1' => null]],
+] as $name => $bad) {
+    aegis_mfa_write_json(aegis_mfa_history_path(), $bad);
+    $threw = false;
+    try {
+        aegis_mfa_lockout_history(1000);
+        aegis_mfa_flush_lockout_history();
+        aegis_mfa_clear_lockout_history(2000);
+    } catch (\Throwable $e) { $threw = true; }
+    t("corrupt history survives: $name", $threw === false);
+}
+file_put_contents(aegis_mfa_history_path(), '{"entries":{"1.1.1.1":');
+t('truncated history reads empty', aegis_mfa_history_disk() === []);
+@unlink(aegis_mfa_history_path());
+
+// theme: emhttp global wins, then the user file, then the shipped defaults
+file_put_contents($cdir . '/dynamix.cfg', "[display]\ntheme=\"azure\"\n");
+file_put_contents($cdir . '/default.cfg', "[display]\ntheme=\"white\"\n");
+define('AEGIS_MFA_DYNAMIX_CFG', $cdir . '/dynamix.cfg');
+define('AEGIS_MFA_DYNAMIX_DEFAULT', $cdir . '/default.cfg');
+
+t('theme from user file', aegis_mfa_theme() === 'azure');
+$GLOBALS['display'] = ['theme' => 'black'];
+t('emhttp global wins',  aegis_mfa_theme() === 'black');
+$GLOBALS['display'] = ['theme' => 'nonsense'];
+t('junk global ignored', aegis_mfa_theme() === 'azure');
+unset($GLOBALS['display']);
+
+file_put_contents($cdir . '/dynamix.cfg', "[display]\nsomething=\"else\"\n");
+t('falls back to defaults', aegis_mfa_theme() === 'white');
+@unlink($cdir . '/dynamix.cfg');
+t('missing user file ok',   aegis_mfa_theme() === 'white');
+@unlink($cdir . '/default.cfg');
+t('no file falls back light', aegis_mfa_theme() === 'white');
+
+t('white is light', aegis_mfa_theme_is_light('white') === true);
+t('azure is light', aegis_mfa_theme_is_light('azure') === true);
+t('black is dark',  aegis_mfa_theme_is_light('black') === false);
+t('gray is dark',   aegis_mfa_theme_is_light('gray') === false);
+
 echo "\nhelpers.test.php: {$pass} passed, {$fail} failed\n";
-// cleanup
+
 foreach (glob("$work/flash/*") as $g) @unlink($g);
 foreach (glob("$work/state/*") as $g) @unlink($g);
 foreach (glob("$work/conc/*") as $g) @unlink($g);

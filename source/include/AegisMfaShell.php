@@ -1,36 +1,20 @@
 <?php
-/*
- * Aegis MFA for Unraid - shared shell for the pre-auth pages
- * Copyright (C) 2026 Lazaros Chalkidis
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The challenge page and the enrolment wizard render inside the same
- * card the Unraid login uses: angled gradient banner, server name and
- * description, theme-aware palette. Everything is inline (CSS and the
- * shield SVG) so the pages depend on no asset that might not be served
- * before authentication completes.
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
 
-// active webGUI theme, same source the settings page reads
+require_once __DIR__ . '/AegisMfaHelpers.php';
+
 function aegis_mfa_shell_theme(): string {
-    $dyn = @parse_ini_file('/boot/config/plugins/dynamix/dynamix.cfg', true);
-    $t   = $dyn['display']['theme'] ?? 'black';
-    return in_array($t, ['black', 'white', 'azure', 'gray'], true) ? $t : 'black';
+    return aegis_mfa_theme();
 }
 
-// server name and description, where the Unraid login shows them
 function aegis_mfa_shell_identity(): array {
-    $v    = @parse_ini_file('/usr/local/emhttp/state/var.ini') ?: [];
-    $name = trim((string)($v['NAME'] ?? ''));
-    if ($name === '') $name = gethostname() ?: 'Unraid';
-    return [$name, trim((string)($v['COMMENT'] ?? ''))];
+    return [aegis_mfa_server_name(), trim((string)(aegis_mfa_var_ini()['COMMENT'] ?? ''))];
 }
 
-// the shield mark standing in for the case icon
 function aegis_mfa_shell_shield(int $size = 78): string {
     return '<svg width="' . $size . '" height="' . $size . '" viewBox="0 0 24 24" fill="none"'
          . ' stroke="currentColor" stroke-width="1.1" stroke-linecap="round"'
@@ -40,14 +24,12 @@ function aegis_mfa_shell_shield(int $size = 78): string {
          . '<path d="M12 12.6V15.2"/></svg>';
 }
 
-// head, themed body, card, banner, identity. leaves .amfa-body open for the page content
+// css and svg are inline: these pages render before authentication, when no asset is guaranteed to be served
 function aegis_mfa_shell_open(string $title, string $extraCss = ''): void {
     $esc = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
     [$host, $desc] = aegis_mfa_shell_identity();
     $theme = aegis_mfa_shell_theme();
 
-    // hardening for the pre-auth pages, sent only if nothing has been output yet (the challenge runs inside .login.php):
-    // frame-deny against clickjacking, nosniff, no-referrer, and no-store because the page carries a CSRF token and a username
     if (!headers_sent()) {
         header('X-Frame-Options: DENY');
         header('X-Content-Type-Options: nosniff');
@@ -199,7 +181,6 @@ h1 { font-size: 2.6rem; font-weight: 700; }
 <?php
 }
 
-// optional footer row, then closes what shell_open left open
 function aegis_mfa_shell_close(string $footHtml = ''): void {
     if ($footHtml !== '') {
         echo '        <div class="amfa-foot">' . $footHtml . "</div>\n";

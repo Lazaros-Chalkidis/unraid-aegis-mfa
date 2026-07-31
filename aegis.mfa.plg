@@ -2,12 +2,12 @@
 <!DOCTYPE PLUGIN [
  <!ENTITY name      "aegis.mfa">
  <!ENTITY author    "Lazaros Chalkidis">
- <!ENTITY version   "2026.07.25">
+ <!ENTITY version   "2026.07.31">
  <!ENTITY branch    "main">
  <!ENTITY gitURL    "https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa">
  <!ENTITY pluginURL "&gitURL;/releases/download/&version;/&name;-&version;.txz">
  <!ENTITY selfURL   "https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/&branch;/&name;.plg">
- <!ENTITY md5       "245e306402dbe00f19ee6282130df10c">
+ <!ENTITY md5       "857b85af96df38930f52947b0393ca93">
  <!ENTITY launch    "Settings/AegisMfa">
 ]>
 
@@ -27,6 +27,38 @@ Two-factor authentication for the Unraid webGUI. TOTP codes from any authenticat
 <![CDATA[
 
 # Aegis MFA
+
+## Version 2026.07.31
+
+### Security
+- The settings page now needs a code like every other page. It has the Disable button on it, so the password alone was enough to switch MFA off
+- Every action on the settings page carries its own CSRF token
+- Two copies of the same code sent at the same moment can no longer both get in
+- Setup links and the account name in your authenticator no longer come from a header a visitor can set
+- `aegis-mfa enforce` rejects anything that is not a plain number of hours
+- The failure counter has an upper bound, so a flood from many addresses cannot fill memory
+
+### Added
+- Lockout history: a section listing blocked addresses with the failure count, when they were locked and how long is left. Unlock frees one now, Delete drops a spent row, Clear removes the expired ones
+- Keep history switch: blocked addresses survive a reboot. Nothing is written while requests come in, the ten-minute cron saves a snapshot and only when something changed
+- The page warns you when the browser you are on is on the trusted list, since an exempt browser looked exactly like a protected one
+- Accounts that cannot sign in to the webGUI, share users, are marked as such and left out of the count.
+
+### Changed
+- New backup codes now work like the first set: shown once, downloadable, and confirmed by typing one back. Your current codes keep working until you confirm, so closing the page halfway no longer leaves you with none
+- Uninstalling keeps your settings and enrolments, and takes only its own files. A reinstall picks them up with MFA switched off. The command to erase everything is printed at the end
+- Grace period defaults to two days instead of seven on new installs. An existing setting is left alone
+- The Locked out text now explains why SSH still works, gives the exact command, and separates USB boot from internal boot
+- The syslog line says which credential was used, `app code` or `backup code` with how many are left
+
+### Fixed
+- MFA is enabled but nothing to look at: the notice promised a dry run even when the server went straight to enforcing
+- `aegis-mfa status` reported no enrolled accounts on a server that had them
+- A half-finished code re-issue reappeared after a full uninstall, offering codes for an account that no longer existed
+- Background requests received the login page instead of an answer, which showed up as stray text at the top of the webGUI
+- On the white and azure themes the title, the notice and the summary cards could turn invisible
+- Downloaded packages piled up on the boot device, one per release
+- The stylesheet could stay cached after an update
 
 ## Version 2026.07.25
 
@@ -140,6 +172,23 @@ fi
 
 # secrets.json is never written here, an upgrade must not touch a single byte of it
 
+# unraid reinstalls from the local package at boot, so the current one stays and older ones go
+for pkg in /boot/config/plugins/&name;/&name;-*.txz; do
+  if [ -f "$pkg" ]; then
+    if [ "$pkg" != "/boot/config/plugins/&name;/&name;-&version;.txz" ]; then
+      rm -f "$pkg"
+      echo " Removed old package $(basename "$pkg")."
+    fi
+  fi
+done
+
+# leftover from the removed checksum list, plugin-managed and unread. logged, not removed quietly
+if [ -f /boot/config/plugins/&name;/compat.json ]; then
+    rm -f /boot/config/plugins/&name;/compat.json
+    logger -t aegis-mfa "removed obsolete compat.json from the boot device"
+    echo " Removed obsolete compat.json (tested-release list, no longer used)."
+fi
+
 # the pure-bash recovery script goes on the flash: reachable with the plugin folder gone,
 # working with PHP broken. overwritten every install to stay current
 cp -f /usr/local/emhttp/plugins/&name;/scripts/aegis-mfa-recover.sh \
@@ -149,9 +198,6 @@ chmod 0755 /boot/config/plugins/&name;/recover.sh 2>/dev/null
 # reset opcache so the login path runs the upgraded files, not stale bytecode
 php -r "if (function_exists(\"opcache_reset\")) opcache_reset();" >/dev/null 2>/dev/null
 
-# fold the shipped baseline into the flash compat.json, the flash copy wins. runs before
-# the reconcile so the tested notice is right from the first look
-php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; aegis_mfa_merge_compat();" >/dev/null 2>/dev/null
 
 # bring the patches in line with the saved setting: no-op on first install, on an upgrade with MFA
 # on it re-points the hooks at this build. anything off removes the patches, never half-wired
@@ -175,9 +221,12 @@ echo ""
 
 <FILE Run="/bin/bash" Method="remove">
 <INLINE>
-# 1. Un-patch the two Unraid login files FIRST, while our code still exists.
+# 1. Un-patch the login files FIRST, while our code still exists, and turn the saved switch off with them
+SWITCH_OFF=0
 if [[ -f /usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php ]]; then
-    php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; \$r = aegis_mfa_uninstall(); echo \"login files restored: \" . (\$r[\"state\"] ?? \"unknown\") . PHP_EOL;" 2>/dev/null
+    if php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaAdmin.php\"; \$r = aegis_mfa_uninstall(); echo \"login files restored: \" . (\$r[\"state\"] ?? \"unknown\") . PHP_EOL; exit(aegis_mfa_set_enabled(false) ? 0 : 1);" 2>/dev/null; then
+        SWITCH_OFF=1
+    fi
 fi
 
 # 2. drop the CLI symlink and the cron entry
@@ -192,8 +241,16 @@ rm -rf /var/local/&name;
 removepkg &name;-&version;
 rm -rf /usr/local/emhttp/plugins/&name;
 
-# 5. flash config last, it takes the secrets with it, a reinstall starts clean
-rm -rf /boot/config/plugins/&name;
+# 5. only our own files leave the boot device: one unconfirmed click is not consent to drop enrolments
+rm -f /boot/config/plugins/&name;/recover.sh
+rm -f /boot/config/plugins/&name;/&name;-*.txz
+rm -f /boot/config/plugins/&name;/lockouts.json
+
+# the flag is the fallback for a switch we could not write, so it only stays behind when PHP did not run
+if [[ "$SWITCH_OFF" == "1" ]]; then
+    rm -f /boot/config/plugins/&name;/DISABLE.flag
+fi
+rmdir /boot/config/plugins/&name; 2>/dev/null
 
 # clear opcache so the restored login files are the ones that run
 php -r "if (function_exists(\"opcache_reset\")) opcache_reset();" >/dev/null 2>/dev/null
@@ -203,6 +260,13 @@ echo "----------------------------------------------------"
 echo " &name; has been removed."
 echo " The Unraid login files were restored to stock and"
 echo " password-only login is active again."
+echo ""
+echo " Your settings and 2FA enrolments were left in place:"
+echo "   /boot/config/plugins/&name;/"
+echo " A reinstall picks them up, with MFA switched off until"
+echo " you turn it back on. To erase them instead, including"
+echo " the TOTP secrets and the backup codes:"
+echo "   rm -rf /boot/config/plugins/&name;"
 echo "----------------------------------------------------"
 echo ""
 </INLINE>

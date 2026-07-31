@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Plugin>
   <Name>Aegis MFA</Name>
-  <Overview><![CDATA[Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app.]]></Overview>
+  <Overview><![CDATA[Two-factor authentication for the Unraid webGUI.]]></Overview>
   <PluginURL>https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/main/aegis.mfa.plg</PluginURL>
   <PluginAuthor>Lazaros Chalkidis</PluginAuthor>
   <Support>https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa/issues</Support>

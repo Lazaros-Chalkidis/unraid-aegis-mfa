@@ -1,30 +1,20 @@
 <?php
-/*
- * Aegis MFA for Unraid - admin settings actions + summary
- * Copyright (C) 2026 Lazaros Chalkidis
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Backs the settings page. These functions only touch config/secrets;
- * toggling "enabled" writes config, and the PAGE controller is responsible
- * for calling aegis_mfa_reconcile_patches() afterwards so the patches follow
- * the setting. Keeping that dependency in the controller (not here) means
- * this file never needs the installer.
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
 
 require_once __DIR__ . '/AegisMfaGate.php';
 
 function aegis_mfa_set_config_key(string $key, $value): bool {
     $ok = aegis_mfa_update_json(aegis_mfa_flash() . '/config.json',
         function ($c) use ($key, $value) { $c[$key] = $value; return $c; });
-    aegis_mfa_config(true);   // drop the static cache so the next read is fresh
+    aegis_mfa_config(true);
     return $ok;
 }
 
-// caller must run aegis_mfa_reconcile_patches() after this
+// writes config only, the page controller calls reconcile afterwards so the patches follow the setting
 function aegis_mfa_set_enabled(bool $on): bool {
     return aegis_mfa_set_config_key('enabled', $on);
 }
@@ -33,7 +23,6 @@ function aegis_mfa_enforce_now(?int $now = null): bool {
     return aegis_mfa_set_config_key('enforce_after', $now ?? time());
 }
 
-// begin a dry-run window: enabled but non-enforcing for $hours
 function aegis_mfa_start_dry_run(int $hours = 24, ?int $now = null): bool {
     $now = $now ?? time();
     return aegis_mfa_set_config_key('enforce_after', $now + max(0, $hours) * 3600);
@@ -43,7 +32,10 @@ function aegis_mfa_set_grace_days(int $days): bool {
     return aegis_mfa_set_config_key('grace_period_days', max(0, $days));
 }
 
-// valid when inet_pton parses the address and the prefix fits the family width
+function aegis_mfa_set_lockout_history(bool $on): bool {
+    return aegis_mfa_set_config_key('lockout_history', $on);
+}
+
 function aegis_mfa_valid_cidr(string $c): bool {
     $c = trim($c);
     if ($c === '') return false;
@@ -55,7 +47,6 @@ function aegis_mfa_valid_cidr(string $c): bool {
     return $b >= 0 && $b <= strlen($bin) * 8;
 }
 
-// validate a list, keep the good ones, report the rest
 function aegis_mfa_set_trust_lan(array $cidrs): array {
     $accepted = []; $rejected = [];
     foreach ($cidrs as $c) {
@@ -82,7 +73,7 @@ function aegis_mfa_set_trusted_proxies(array $ips): array {
     return ['ok' => $ok, 'accepted' => $accepted, 'rejected' => $rejected];
 }
 
-// reset a user's 2FA. requireReenroll puts them back in a fresh grace window, false removes them entirely
+// drops the secret and puts the account back in grace
 function aegis_mfa_reset_user(string $user, bool $requireReenroll = true, ?int $now = null): bool {
     $now = $now ?? time();
     return aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
@@ -98,36 +89,93 @@ function aegis_mfa_reset_user(string $user, bool $requireReenroll = true, ?int $
         });
 }
 
-// fresh backup codes for an enrolled user, plain codes shown once
-function aegis_mfa_regenerate_backup_codes(string $user): ?array {
+// the new codes sit in the session until one is typed back, so a half-finished page leaves the old ones working
+function aegis_mfa_begin_backup_regen(string $user): ?array {
     $sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
     if (($sec['users'][$user]['status'] ?? '') !== 'enrolled') return null;
+    if (!aegis_mfa_session_ensure()) return null;
     list($plain, $hashed) = aegis_mfa_generate_backup_codes(10);
-    $ok = aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
-        function ($s) use ($user, $hashed) {
-            $s['users'][$user]['backup_codes'] = $hashed;
-            $s['users'][$user]['backup_codes_used'] = [];
-            return $s;
-        });
-    return $ok ? $plain : null;
+    $_SESSION['aegis_mfa_regen'] = [
+        'user'    => $user,
+        'plain'   => $plain,
+        'hashed'  => $hashed,
+        'started' => time(),
+    ];
+    return $plain;
 }
 
-// everything the settings page needs in one call. getent is injectable so this is testable
+function aegis_mfa_regen_state(?int $now = null): ?array {
+    $r = $_SESSION['aegis_mfa_regen'] ?? null;
+    if (!is_array($r) || empty($r['plain'])) return null;
+
+    // never show one account's codes to another, whatever unraid allows to log in later
+    $user = aegis_mfa_current_user();
+    if ($user === '' || ($r['user'] ?? '') !== $user) return null;
+
+    // the session outlives the plugin: a reset, or a full uninstall and reinstall, leaves this
+    // sitting here offering codes for an enrolment that no longer exists
+    $stale = ($now ?? time()) - (int)($r['started'] ?? 0) > 1800;
+    if ($stale || aegis_mfa_user_status($user) !== 'enrolled') {
+        unset($_SESSION['aegis_mfa_regen']);
+        return null;
+    }
+    return $r;
+}
+
+function aegis_mfa_cancel_backup_regen(): void {
+    unset($_SESSION['aegis_mfa_regen']);
+}
+
+// the typed code is spent, same as at enrolment: it has been through a browser form
+function aegis_mfa_commit_backup_regen(string $confirm): array {
+    $r = aegis_mfa_regen_state();
+    if ($r === null) return ['ok' => false, 'reason' => 'no_regen'];
+
+    $norm = strtolower(str_replace('-', '', $confirm));
+    $used = -1;
+    foreach ($r['plain'] as $i => $c) {
+        if (strtolower(str_replace('-', '', $c)) === $norm) { $used = $i; break; }
+    }
+    if ($used < 0) return ['ok' => false, 'reason' => 'bad_confirm'];
+
+    $user = $r['user'];
+    $wrote = false;
+    aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
+        function ($s) use ($user, $r, $used, &$wrote) {
+            if (($s['users'][$user]['status'] ?? '') !== 'enrolled') return $s;
+            $s['users'][$user]['backup_codes']      = $r['hashed'];
+            $s['users'][$user]['backup_codes_used'] = [$used];
+            $wrote = true;
+            return $s;
+        });
+    if (!$wrote) return ['ok' => false, 'reason' => 'not_enrolled'];
+
+    unset($_SESSION['aegis_mfa_regen']);
+    return ['ok' => true];
+}
+
 function aegis_mfa_admin_summary(?callable $getent = null, ?int $now = null): array {
     $now = $now ?? time();
     $cfg = aegis_mfa_config(true);
     $sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json') ?? ['users' => []];
     $lock = aegis_mfa_read_json(aegis_mfa_lockout_path()) ?? ['failures' => []];
 
-    $users = []; $enrolled = 0; $pending = 0;
+    $users = []; $enrolled = 0; $pending = 0; $seenCount = 0;
     foreach (aegis_mfa_unraid_users($getent) as $u) {
         $status = aegis_mfa_user_status($u, $now);
-        if ($status === 'enrolled') $enrolled++;
-        if ($status === 'pending' || $status === 'locked') $pending++;
-        $rec = $sec['users'][$u] ?? [];
+        $rec    = $sec['users'][$u] ?? [];
+        $seen   = (int)($rec['seen_at'] ?? 0) > 0 || $status === 'enrolled';
+
+        // share users never reach the webGUI login, so they are not part of the count
+        if ($seen) {
+            $seenCount++;
+            if ($status === 'enrolled') $enrolled++;
+            if ($status === 'pending' || $status === 'locked') $pending++;
+        }
         $users[] = [
             'name'             => $u,
             'status'           => $status,
+            'seen'             => $seen,
             'backup_remaining' => aegis_mfa_backup_codes_remaining($u),
             'enrolled_at'      => $rec['enrolled_at'] ?? null,
             'grace_until'      => $rec['grace_until'] ?? null,
@@ -146,13 +194,20 @@ function aegis_mfa_admin_summary(?callable $getent = null, ?int $now = null): ar
         'enforce_after'  => (int)$cfg['enforce_after'],
         'dry_run'        => aegis_mfa_enabled() && !aegis_mfa_enforcing($now),
         'trust_lan'      => $cfg['trust_lan'],
+
+        // being exempt without knowing it is the worst state to leave an admin in
+        'client_ip'      => aegis_mfa_client_ip(),
+        'client_trusted' => aegis_mfa_client_ip() !== '' && aegis_mfa_ip_trusted(aegis_mfa_client_ip()),
         'trusted_proxies'=> $cfg['trusted_proxies'],
         'grace_days'     => (int)$cfg['grace_period_days'],
         'enrolled'       => $enrolled,
         'pending'        => $pending,
-        'total_users'    => count($users),
+        'total_users'    => $seenCount,
+        'listed_users'   => count($users),
         'locked_ips'     => $lockedIps,
         'failures_today' => $failuresToday,
+        'history_on'     => !empty($cfg['lockout_history']),
+        'history'        => aegis_mfa_lockout_history($now),
         'users'          => $users,
     ];
 }

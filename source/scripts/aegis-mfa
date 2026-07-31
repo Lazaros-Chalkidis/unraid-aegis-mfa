@@ -1,12 +1,17 @@
 #!/bin/bash
-# Aegis MFA CLI. Recovery and maintenance from SSH or the local console.
+# ============================================================================
+# AEGIS MFA
+# Copyright (C) 2026 Lazaros Chalkidis
+# License: GPLv3
+# =========================================================================
+
+# CLI for recovery and maintenance from SSH or the local console
 #   aegis-mfa disable            turn MFA off and remove the login patches
 #   aegis-mfa enable             turn MFA on (re-applies patches, keeps settings)
 #   aegis-mfa status             show patch and config state
 #   aegis-mfa reconcile          force a patch reconcile now (what boot/cron do)
 #   aegis-mfa enforce [now|Nh]   end the dry-run now, or (re)start one of N hours
 #   aegis-mfa preflight          readiness report before enabling, live files never touched
-#   aegis-mfa capture [version]  record vanilla checksums as tested, QA step on a clean install
 PHP=/usr/bin/php
 INC=/usr/local/emhttp/plugins/aegis.mfa/include
 case "$1" in
@@ -30,6 +35,8 @@ case "$1" in
           ? 'yes'
           : 'no (dry-run until ' . date('Y-m-d H:i', \$ea) . ')') . PHP_EOL;
       print_r(aegis_mfa_patch_state());
+      \$lan = aegis_mfa_config()['trust_lan'];
+      echo 'trusted networks: ' . (\$lan ? implode(', ', \$lan) . '  (these skip the prompt)' : 'none') . PHP_EOL;
       \$sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
       \$users = array_keys(\$sec['users'] ?? []);
       if (!\$users) {
@@ -81,16 +88,17 @@ case "$1" in
           aegis_mfa_enforce_now(time() - 1);
           echo 'Enforcing now. Enrolled users will see the 2FA challenge on their next login.' . PHP_EOL;"
         ;;
-      *[0-9]h|*[0-9])
+      *)
         H="${2%h}"
+        case "$H" in
+          ""|*[!0-9]*) echo "usage: aegis-mfa enforce [now|<hours>h]"; exit 1 ;;
+        esac
         $PHP -r "require '$INC/AegisMfaAdmin.php';
           \$h = (int)'$H';
           aegis_mfa_start_dry_run(\$h);
           echo 'Dry run for ' . \$h . 'h. MFA is enabled but enrolled users keep signing in' . PHP_EOL;
           echo 'with the password alone until ' . date('Y-m-d H:i', (int)aegis_mfa_config(true)['enforce_after']) . '.' . PHP_EOL;"
         ;;
-      *)
-        echo "usage: aegis-mfa enforce [now|<hours>h]"; exit 1 ;;
     esac
     ;;
   preflight)
@@ -104,22 +112,6 @@ case "$1" in
           : 'PREFLIGHT FAIL: do NOT enable MFA. Fix the FAIL lines first.') . PHP_EOL;
       exit(\$r['ok'] ? 0 : 1);"
     ;;
-  capture)
-    VER="${2:-$(sed -n 's/^version="\(.*\)"/\1/p' /etc/unraid-version 2>/dev/null)}"
-    case "$VER" in
-      ""|*[!0-9A-Za-z._-]*) echo "usage: aegis-mfa capture [unraid-version]"; exit 1 ;;
-    esac
-    $PHP -r "require '$INC/AegisMfaInstall.php';
-      \$r = aegis_mfa_capture_compat('$VER');
-      if (\$r['ok'] ?? false) {
-          echo 'captured vanilla checksums for $VER' . PHP_EOL;
-          print_r(\$r['shas']);
-      } else {
-          echo 'refused: ' . (\$r['reason'] ?? 'unknown')
-             . ' (both login files must be unpatched vanilla; run aegis-mfa disable first)' . PHP_EOL;
-          exit(1);
-      }"
-    ;;
   *)
-    echo "usage: aegis-mfa {disable|enable|status|users|enforce [now|Nh]|reconcile|preflight|capture [version]}"; exit 1 ;;
+    echo "usage: aegis-mfa {disable|enable|status|users|enforce [now|Nh]|reconcile|preflight}"; exit 1 ;;
 esac

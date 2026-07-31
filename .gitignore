@@ -1,3 +1,4 @@
 packages/
 package-temp/
 *.txz
+__pycache__/

@@ -1,4 +1,10 @@
 #!/bin/bash
+# ============================================================================
+# AEGIS MFA
+# Copyright (C) 2026 Lazaros Chalkidis
+# License: GPLv3
+# =========================================================================
+
 # runs the pure-bash recovery against real patched fixtures, both the backup-restore
 # path and the sed-strip fallback, so a marker or path change cannot silently break it
 set -u

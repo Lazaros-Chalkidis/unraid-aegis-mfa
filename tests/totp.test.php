@@ -1,9 +1,13 @@
 <?php
-/*
- * Aegis MFA - TOTP test suite
- * run: php tests/totp.test.php
- * exit 0 on full pass, 1 on any failure
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
+
+require_once __DIR__ . '/strict.php';
+
+// TOTP core against the RFC vectors. run: php tests/totp.test.php
 
 require __DIR__ . '/../source/include/AegisMfaTotp.php';
 
@@ -15,8 +19,6 @@ function t(string $name, bool $ok): void {
     echo "FAIL  $name\n";
 }
 
-// base32, RFC 4648
-// the shared RFC 4226/6238 test secret and its known base32 form
 $ref = '12345678901234567890';
 $b32 = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 
@@ -35,13 +37,11 @@ for ($i = 0; $i < 20; $i++) {
     t("b32 roundtrip len " . strlen($raw), aegis_totp_b32decode(aegis_totp_b32encode($raw)) === $raw);
 }
 
-// HOTP, RFC 4226 appendix D vectors
 $hotp = ['755224','287082','359152','969429','338314','254676','287922','162583','399871','520489'];
 foreach ($hotp as $c => $want) {
     t("hotp counter $c", aegis_totp_hotp($ref, $c) === $want);
 }
 
-// TOTP, RFC 6238 appendix B vectors (SHA1, 8 digits)
 $totp8 = [
     59          => '94287082',
     1111111109  => '07081804',
@@ -54,9 +54,8 @@ foreach ($totp8 as $time => $want) {
     t("totp8 T=$time", aegis_totp_hotp($ref, intdiv($time, 30), 8) === $want);
 }
 
-// verify + window behaviour (injected clock)
 $b32ref = aegis_totp_b32encode($ref);
-$now    = 1111111111;            // step 37037037
+$now    = 1111111111;
 $cur    = aegis_totp_hotp($ref, 37037037);
 $prev   = aegis_totp_hotp($ref, 37037036);
 $next   = aegis_totp_hotp($ref, 37037038);
@@ -77,13 +76,11 @@ t('verify letters',          aegis_totp_verify($b32ref, 'abcdef', 1, 30, $now) =
 t('verify bad secret',       aegis_totp_verify('GEZ1', $cur, 1, 30, $now) === false);
 t('verify short secret',     aegis_totp_verify(aegis_totp_b32encode('short'), $cur, 1, 30, $now) === false);
 
-// verify_step returns the matched step for replay tracking
 t('step exact',  aegis_totp_verify_step($b32ref, $cur,   1, 30, $now) === 37037037);
 t('step prev',   aegis_totp_verify_step($b32ref, $prev,  1, 30, $now) === 37037036);
 t('step next',   aegis_totp_verify_step($b32ref, $next,  1, 30, $now) === 37037038);
 t('step none',   aegis_totp_verify_step($b32ref, $wrong, 1, 30, $now) === false);
 
-// secret generation
 $s1 = aegis_totp_generate_secret();
 $s2 = aegis_totp_generate_secret();
 t('secret length 32',   strlen($s1) === 32);
@@ -92,7 +89,6 @@ t('secret unique',      $s1 !== $s2);
 t('secret decodes 20B', strlen(aegis_totp_b32decode($s1)) === 20);
 t('secret custom len',  strlen(aegis_totp_generate_secret(16)) === 16);
 
-// provisioning URI
 $uri = aegis_totp_uri('ABC234DEF567', 'root@raptor1');
 t('uri label',   str_starts_with($uri, 'otpauth://totp/Aegis%20MFA:root%40raptor1?'));
 t('uri secret',  strpos($uri, 'secret=ABC234DEF567') !== false);
@@ -101,6 +97,5 @@ t('uri sha1',    strpos($uri, 'algorithm=SHA1') !== false);
 t('uri digits',  strpos($uri, 'digits=6') !== false);
 t('uri period',  strpos($uri, 'period=30') !== false);
 
-// summary
 echo "\ntotp.test.php: {$pass} passed, {$fail} failed\n";
 exit($fail === 0 ? 0 : 1);

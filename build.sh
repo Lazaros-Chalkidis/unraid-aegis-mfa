@@ -1,7 +1,11 @@
 #!/bin/bash
-# AEGIS MFA - build.sh
-# Copyright (C) 2026 Lazaros Chalkidis - License: GPLv3
-# Packages the plugin source into a .txz and generates the .plg file.
+# ============================================================================
+# AEGIS MFA
+# Copyright (C) 2026 Lazaros Chalkidis
+# License: GPLv3
+# =========================================================================
+
+# packages source/ into a .txz and writes the .plg
 #
 # Usage:
 #   ./build.sh                        release build (today's date, main branch)
@@ -36,6 +40,20 @@ if [[ "$STAGE_INPUT" == "local" ]]; then
     STAGE_INPUT=""
 fi
 
+# these land in XML attributes in the .plg, so a quote or an ampersand here is code, not a typo
+case "$LETTER_SUFFIX" in
+    ""|[a-z]) ;;
+    *) echo "Suffix must be empty or one lowercase letter (a-z). Refusing to build."; exit 1 ;;
+esac
+case "$STAGE_INPUT" in
+    ""|dev|release) ;;
+    *) echo "Stage must be empty, 'dev' or 'release'. Refusing to build."; exit 1 ;;
+esac
+case "$LOCAL_INSTALL" in
+    ""|local) ;;
+    *) echo "Third argument must be empty or 'local'. Refusing to build."; exit 1 ;;
+esac
+
 STAGE_SUFFIX=""
 if [[ -n "$STAGE_INPUT" && "$STAGE_INPUT" != "release" ]]; then
     STAGE_SUFFIX="-${STAGE_INPUT}"
@@ -60,6 +78,12 @@ fi
 # Changelog
 CHANGELOG_MD_FILE="CHANGELOG.md"
 if [[ -f "$CHANGELOG_MD_FILE" ]]; then
+    # a CDATA terminator in here closes the block early and the rest becomes real elements, run as root
+    if grep -qF ']]>' "$CHANGELOG_MD_FILE"; then
+        echo "CHANGELOG.md contains ']]>' which would break out of the CDATA block."
+        echo "Remove it. Refusing to build."
+        exit 1
+    fi
     CHANGES_BLOCK="$(cat "$CHANGELOG_MD_FILE")"
 else
     CHANGES_BLOCK="### ${VERSION}
@@ -105,7 +129,6 @@ cp -R source/* "${PLUGIN_DEST}/"
 echo "${VERSION}" > "${PLUGIN_DEST}/VERSION"
 
 # ship the tested-release baseline when the repo carries one, the install merge is a no-op without it
-[ -f compat.json ] && cp compat.json "${PLUGIN_DEST}/compat.default.json"
 
 # branch metadata, readable by PHP
 cat > "${PLUGIN_DEST}/branch.meta" << METAEOF
@@ -220,6 +243,23 @@ fi
 
 # secrets.json is never written here, an upgrade must not touch a single byte of it
 
+# unraid reinstalls from the local package at boot, so the current one stays and older ones go
+for pkg in /boot/config/plugins/&name;/&name;-*.txz; do
+  if [ -f "$pkg" ]; then
+    if [ "$pkg" != "/boot/config/plugins/&name;/&name;-&version;.txz" ]; then
+      rm -f "$pkg"
+      echo " Removed old package $(basename "$pkg")."
+    fi
+  fi
+done
+
+# leftover from the removed checksum list, plugin-managed and unread. logged, not removed quietly
+if [ -f /boot/config/plugins/&name;/compat.json ]; then
+    rm -f /boot/config/plugins/&name;/compat.json
+    logger -t aegis-mfa "removed obsolete compat.json from the boot device"
+    echo " Removed obsolete compat.json (tested-release list, no longer used)."
+fi
+
 # the pure-bash recovery script goes on the flash: reachable with the plugin folder gone,
 # working with PHP broken. overwritten every install to stay current
 cp -f /usr/local/emhttp/plugins/&name;/scripts/aegis-mfa-recover.sh \
@@ -229,9 +269,6 @@ chmod 0755 /boot/config/plugins/&name;/recover.sh 2>/dev/null
 # reset opcache so the login path runs the upgraded files, not stale bytecode
 php -r "if (function_exists(\"opcache_reset\")) opcache_reset();" >/dev/null 2>/dev/null
 
-# fold the shipped baseline into the flash compat.json, the flash copy wins. runs before
-# the reconcile so the tested notice is right from the first look
-php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; aegis_mfa_merge_compat();" >/dev/null 2>/dev/null
 
 # bring the patches in line with the saved setting: no-op on first install, on an upgrade with MFA
 # on it re-points the hooks at this build. anything off removes the patches, never half-wired
@@ -253,9 +290,12 @@ echo ""'
 
 # order matters: the patches must come out while the code that removes them still exists.
 # Deleting the folder first would strand the hooks in Unraid core files
-PLG_REMOVE_SCRIPT='# 1. Un-patch the two Unraid login files FIRST, while our code still exists.
+PLG_REMOVE_SCRIPT='# 1. Un-patch the login files FIRST, while our code still exists, and turn the saved switch off with them
+SWITCH_OFF=0
 if [[ -f /usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php ]]; then
-    php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; \$r = aegis_mfa_uninstall(); echo \"login files restored: \" . (\$r[\"state\"] ?? \"unknown\") . PHP_EOL;" 2>/dev/null
+    if php -r "require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaInstall.php\"; require \"/usr/local/emhttp/plugins/&name;/include/AegisMfaAdmin.php\"; \$r = aegis_mfa_uninstall(); echo \"login files restored: \" . (\$r[\"state\"] ?? \"unknown\") . PHP_EOL; exit(aegis_mfa_set_enabled(false) ? 0 : 1);" 2>/dev/null; then
+        SWITCH_OFF=1
+    fi
 fi
 
 # 2. drop the CLI symlink and the cron entry
@@ -270,8 +310,16 @@ rm -rf /var/local/&name;
 removepkg &name;-&version;
 rm -rf /usr/local/emhttp/plugins/&name;
 
-# 5. flash config last, it takes the secrets with it, a reinstall starts clean
-rm -rf /boot/config/plugins/&name;
+# 5. only our own files leave the boot device: one unconfirmed click is not consent to drop enrolments
+rm -f /boot/config/plugins/&name;/recover.sh
+rm -f /boot/config/plugins/&name;/&name;-*.txz
+rm -f /boot/config/plugins/&name;/lockouts.json
+
+# the flag is the fallback for a switch we could not write, so it only stays behind when PHP did not run
+if [[ "$SWITCH_OFF" == "1" ]]; then
+    rm -f /boot/config/plugins/&name;/DISABLE.flag
+fi
+rmdir /boot/config/plugins/&name; 2>/dev/null
 
 # clear opcache so the restored login files are the ones that run
 php -r "if (function_exists(\"opcache_reset\")) opcache_reset();" >/dev/null 2>/dev/null
@@ -281,6 +329,13 @@ echo "----------------------------------------------------"
 echo " &name; has been removed."
 echo " The Unraid login files were restored to stock and"
 echo " password-only login is active again."
+echo ""
+echo " Your settings and 2FA enrolments were left in place:"
+echo "   /boot/config/plugins/&name;/"
+echo " A reinstall picks them up, with MFA switched off until"
+echo " you turn it back on. To erase them instead, including"
+echo " the TOTP secrets and the backup codes:"
+echo "   rm -rf /boot/config/plugins/&name;"
 echo "----------------------------------------------------"
 echo ""'
 
@@ -421,6 +476,35 @@ fi
 
 # Cleanup
 rm -rf "${PACKAGE_DIR_TEMP}"
+
+# last gate: a .plg that does not parse, or grew a runner we did not write, must not ship
+if [[ "$LOCAL_INSTALL" == "local" ]]; then EXPECTED_RUNNERS=4; else EXPECTED_RUNNERS=3; fi
+if command -v php &>/dev/null && php -r 'exit(class_exists("DOMDocument") ? 0 : 1);'; then
+    php -r '
+        $f = $argv[1];
+        libxml_use_internal_errors(true);
+        $d = new DOMDocument();
+        if (!$d->load($f)) {
+            $e = libxml_get_errors();
+            fwrite(STDERR, "PLG is not valid XML: " . trim($e[0]->message ?? "unknown") . PHP_EOL);
+            exit(1);
+        }
+        $runners = 0;
+        foreach ($d->getElementsByTagName("FILE") as $n) {
+            if ($n->hasAttribute("Run") && $n->getElementsByTagName("INLINE")->length) $runners++;
+        }
+        if ($runners !== (int)$argv[2]) {
+            fwrite(STDERR, "PLG has $runners inline script blocks, expected {$argv[2]}. Refusing." . PHP_EOL);
+            exit(1);
+        }
+    ' "${PLUGIN_NAME}.plg" "${EXPECTED_RUNNERS}" || {
+        rm -f "${PLUGIN_NAME}.plg"
+        echo "Build aborted, the .plg was removed."
+        exit 1
+    }
+else
+    echo "Note: no DOMDocument here, the .plg was not parsed. Build again where PHP has ext-xml."
+fi
 
 # Summary
 echo ""

@@ -1,6 +1,38 @@
 
 # Aegis MFA
 
+## Version 2026.07.31
+
+### Security
+- The settings page now needs a code like every other page. It has the Disable button on it, so the password alone was enough to switch MFA off
+- Every action on the settings page carries its own CSRF token
+- Two copies of the same code sent at the same moment can no longer both get in
+- Setup links and the account name in your authenticator no longer come from a header a visitor can set
+- `aegis-mfa enforce` rejects anything that is not a plain number of hours
+- The failure counter has an upper bound, so a flood from many addresses cannot fill memory
+
+### Added
+- Lockout history: a section listing blocked addresses with the failure count, when they were locked and how long is left. Unlock frees one now, Delete drops a spent row, Clear removes the expired ones
+- Keep history switch: blocked addresses survive a reboot. Nothing is written while requests come in, the ten-minute cron saves a snapshot and only when something changed
+- The page warns you when the browser you are on is on the trusted list, since an exempt browser looked exactly like a protected one
+- Accounts that cannot sign in to the webGUI, share users, are marked as such and left out of the count.
+
+### Changed
+- New backup codes now work like the first set: shown once, downloadable, and confirmed by typing one back. Your current codes keep working until you confirm, so closing the page halfway no longer leaves you with none
+- Uninstalling keeps your settings and enrolments, and takes only its own files. A reinstall picks them up with MFA switched off. The command to erase everything is printed at the end
+- Grace period defaults to two days instead of seven on new installs. An existing setting is left alone
+- The Locked out text now explains why SSH still works, gives the exact command, and separates USB boot from internal boot
+- The syslog line says which credential was used, `app code` or `backup code` with how many are left
+
+### Fixed
+- MFA is enabled but nothing to look at: the notice promised a dry run even when the server went straight to enforcing
+- `aegis-mfa status` reported no enrolled accounts on a server that had them
+- A half-finished code re-issue reappeared after a full uninstall, offering codes for an account that no longer existed
+- Background requests received the login page instead of an answer, which showed up as stray text at the top of the webGUI
+- On the white and azure themes the title, the notice and the summary cards could turn invisible
+- Downloaded packages piled up on the boot device, one per release
+- The stylesheet could stay cached after an update
+
 ## Version 2026.07.25
 
 ### Improvements

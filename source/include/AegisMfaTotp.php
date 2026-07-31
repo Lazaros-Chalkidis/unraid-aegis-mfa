@@ -1,21 +1,11 @@
 <?php
-/*
- * Aegis MFA for Unraid - TOTP core (RFC 6238 / RFC 4226)
- * Copyright (C) 2026 Lazaros Chalkidis
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Self-contained, no dependencies. SHA1, 6 digits, 30s period.
- * Every function carries the aegis_totp_ prefix: this file is loaded
- * inside the shared webGUI PHP space and a function redeclare is a
- * fatal that try/catch cannot intercept, so collision avoidance is
- * part of the fail-open design.
- */
+/* ============================================================================
+   AEGIS MFA
+   Copyright (C) 2026 Lazaros Chalkidis
+   License: GPLv3
+   ========================================================================= */
 
-// decode RFC 4648 base32, raw bytes or false. tolerant of spaces, lowercase and padding (manual entry)
+// RFC 4648 base32, tolerant of spaces, lowercase and padding for manual entry
 function aegis_totp_b32decode(string $b32) {
     static $map = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
     $b32 = strtoupper(str_replace(' ', '', rtrim($b32, '=')));
@@ -35,7 +25,6 @@ function aegis_totp_b32decode(string $b32) {
     return $out;
 }
 
-// encode raw bytes to RFC 4648 base32, no padding
 function aegis_totp_b32encode(string $raw): string {
     static $map = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
     $val = 0; $bits = 0; $out = '';
@@ -52,7 +41,7 @@ function aegis_totp_b32encode(string $raw): string {
     return $out;
 }
 
-// HOTP value for a counter (RFC 4226). $secret_raw is decoded bytes
+// RFC 4226 HOTP, the counter is the TOTP timestep
 function aegis_totp_hotp(string $secret_raw, int $counter, int $digits = 6): string {
     $hash = hash_hmac('sha1', pack('J', $counter), $secret_raw, true);
     $off  = ord($hash[strlen($hash) - 1]) & 0x0f;
@@ -63,8 +52,7 @@ function aegis_totp_hotp(string $secret_raw, int $counter, int $digits = 6): str
     return str_pad((string)($val % (10 ** $digits)), $digits, '0', STR_PAD_LEFT);
 }
 
-// verify a 6-digit code within +/- $window steps. returns the matched timestep so the caller can persist it
-// and reject replays, or false. compare with === false, step 0 is valid
+// returns the matched step so the caller can reject replays. compare with === false, step 0 is valid
 function aegis_totp_verify_step(string $b32secret, string $code, int $window = 1, int $period = 30, ?int $now = null) {
     $code = preg_replace('/\D/', '', $code);
     if (strlen($code) !== 6) return false;
@@ -75,18 +63,17 @@ function aegis_totp_verify_step(string $b32secret, string $code, int $window = 1
     for ($i = -$window; $i <= $window; $i++) {
         $s = $step + $i;
         if ($s < 0) continue;
-        // hash_equals on every slot, constant time, no early exit
+
         if (hash_equals(aegis_totp_hotp($raw, $s), $code) && $hit === false) $hit = $s;
     }
     return $hit;
 }
 
-// convenience wrapper when the caller handles replay tracking
 function aegis_totp_verify(string $b32secret, string $code, int $window = 1, int $period = 30, ?int $now = null): bool {
     return aegis_totp_verify_step($b32secret, $code, $window, $period, $now) !== false;
 }
 
-// new random base32 secret, 32 chars = 160 bits, the SHA1 size RFC 4226 recommends
+// 32 base32 chars = 160 bits, the SHA1 size RFC 4226 recommends
 function aegis_totp_generate_secret(int $length = 32): string {
     static $map = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
     $bytes = random_bytes($length);
@@ -95,7 +82,6 @@ function aegis_totp_generate_secret(int $length = 32): string {
     return $out;
 }
 
-// otpauth:// URI for the enrolment QR
 function aegis_totp_uri(string $secret, string $account, string $issuer = 'Aegis MFA'): string {
     return 'otpauth://totp/' . rawurlencode($issuer) . ':' . rawurlencode($account)
          . '?secret=' . $secret

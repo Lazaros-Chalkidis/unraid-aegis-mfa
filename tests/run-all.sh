@@ -1,6 +1,11 @@
 #!/bin/bash
-# Aegis MFA - run every test suite.
-# exit 0 = all passed or skipped for missing PHP, 1 = a suite failed, 2 = could not run
+# ============================================================================
+# AEGIS MFA
+# Copyright (C) 2026 Lazaros Chalkidis
+# License: GPLv3
+# =========================================================================
+
+# runs every suite. exit 0 = passed or skipped, 1 = a suite failed, 2 = could not run
 
 cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." || exit 2
 
