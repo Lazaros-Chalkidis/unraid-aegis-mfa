@@ -1422,11 +1422,18 @@
   font-size: 11px;
 }
 .amfa-pk-chip .fa-key { color: var(--amfa-blue); }
-.amfa-pk-remove {
+/* scoped so it outranks `.aegis-mfa-settings button { width: auto }`, and resets Unraid's own button box
+   (margin, min sizes, line-height) that otherwise makes this chip twice as tall as the others */
+.aegis-mfa-settings .amfa-pk-remove {
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
   width: 16px !important; height: 16px !important;
+  min-width: 0 !important; min-height: 0 !important;
+  margin: 0 !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  box-shadow: none !important;
   padding: 0 !important;
   border: none !important;
   background: transparent !important;
@@ -1434,7 +1441,7 @@
   cursor: pointer;
   font-size: 10px !important;
 }
-.amfa-pk-remove:hover { color: #e05252 !important; }
+.aegis-mfa-settings .amfa-pk-remove:hover { color: #e05252 !important; }
 .amfa-pk-add {
   display: inline-flex !important;
   align-items: center;
