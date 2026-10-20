@@ -1,7 +1,7 @@
 
 # Aegis MFA
 
-## Version 2026.09.08
+## Unreleased
 
 ### Added
 - Passkeys as a second factor: face/fingerprint/PIN or a hardware security key, alongside or instead of an authenticator app. Verified by a from-scratch WebAuthn implementation (ES256 only, no third-party library), consistent with the rest of the codebase
