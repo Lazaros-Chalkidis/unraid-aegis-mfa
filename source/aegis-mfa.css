@@ -1386,17 +1386,30 @@
   color: var(--amfa-c-text-muted);
   margin: 0 0 5px;
 }
-.amfa-regen-input {
-  width: 160px;
-  background: var(--amfa-ctrl-bg);
-  border: 1px solid var(--amfa-ctrl-border);
-  border-radius: 4px;
-  color: var(--amfa-c-text);
-  font-family: 'JetBrains Mono', Consolas, monospace;
-  font-size: 12.5px;
-  padding: 5px 8px;
+/* scoped and !important like .amfa-input: Unraid's own input[type=text] rule is more specific than a bare
+   class and otherwise turns this into a full-width underline */
+.aegis-mfa-settings .amfa-regen-input {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  display: block !important;
+  width: 160px !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+  background: var(--amfa-ctrl-bg) !important;
+  border: 1px solid var(--amfa-ctrl-border) !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  color: var(--amfa-c-text) !important;
+  font-family: 'JetBrains Mono', Consolas, monospace !important;
+  font-size: 12.5px !important;
+  line-height: 1.4 !important;
+  padding: 5px 8px !important;
 }
-.amfa-regen-input:focus { outline: none; border-color: var(--amfa-accent); }
+.aegis-mfa-settings .amfa-regen-input::placeholder { color: var(--amfa-c-text-faint) !important; opacity: 1; }
+.aegis-mfa-settings .amfa-regen-input:focus { outline: none !important; border-color: var(--amfa-accent) !important; }
 .amfa-regen-btns { display: flex; gap: 8px; margin-top: 12px; }
 
 /* per-user second-factor chips (TOTP + passkeys) */

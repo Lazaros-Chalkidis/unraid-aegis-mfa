@@ -14,6 +14,9 @@
 - A passkey's signature counter must increase each time it's used, rejecting a cloned authenticator
 - Passkey attempts count against the same per-IP lockout as TOTP codes
 
+### Fixed
+- The field for typing a code back under New codes showed as a full-width line instead of a small box, because Unraid's own input style took over
+
 Contributed by [Sebastian Oehm](https://github.com/SebastianOehm)
 
 ## Version 2026.07.31
