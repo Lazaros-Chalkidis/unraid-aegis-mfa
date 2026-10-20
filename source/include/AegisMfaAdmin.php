@@ -6,6 +6,7 @@
    ========================================================================= */
 
 require_once __DIR__ . '/AegisMfaGate.php';
+require_once __DIR__ . '/AegisMfaWebauthn.php';
 
 function aegis_mfa_set_config_key(string $key, $value): bool {
     $ok = aegis_mfa_update_json(aegis_mfa_flash() . '/config.json',
@@ -154,6 +155,158 @@ function aegis_mfa_commit_backup_regen(string $confirm): array {
     return ['ok' => true];
 }
 
+function aegis_mfa_set_webauthn_rp_origin(string $origin): array {
+    $origin = trim($origin);
+    if ($origin === '') {
+        aegis_mfa_set_config_key('webauthn_rp_origin', '');
+        return ['ok' => true];
+    }
+    if (!aegis_mfa_webauthn_valid_origin($origin)) return ['ok' => false, 'reason' => 'invalid'];
+    aegis_mfa_set_config_key('webauthn_rp_origin', rtrim($origin, '/'));
+    return ['ok' => true];
+}
+
+function aegis_mfa_set_webauthn_assume_https(bool $on): bool {
+    return aegis_mfa_set_config_key('webauthn_assume_https', $on);
+}
+
+// begins adding TOTP to an already-enrolled user (Settings "Add an authenticator app"), same additive shape as aegis_mfa_add_passkey below
+function aegis_mfa_begin_totp_add(string $user): ?array {
+    $sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
+    if (($sec['users'][$user]['status'] ?? '') !== 'enrolled') return null;
+    if (!aegis_mfa_session_ensure()) return null;
+    $secret = aegis_totp_generate_secret();
+    $_SESSION['aegis_mfa_totp_add'] = ['user' => $user, 'secret' => $secret, 'started' => time()];
+    return ['secret' => $secret, 'uri' => aegis_totp_uri($secret, $user . '@' . aegis_mfa_server_name(), 'Aegis MFA')];
+}
+
+// never hand back one account's pending secret to another session, same guard as aegis_mfa_regen_state()
+function aegis_mfa_totp_add_state(?int $now = null): ?array {
+    $r = $_SESSION['aegis_mfa_totp_add'] ?? null;
+    if (!is_array($r) || empty($r['secret'])) return null;
+    $user = aegis_mfa_current_user();
+    if ($user === '' || ($r['user'] ?? '') !== $user) return null;
+    $stale = ($now ?? time()) - (int)($r['started'] ?? 0) > 1800;
+    if ($stale || aegis_mfa_user_status($user) !== 'enrolled') {
+        unset($_SESSION['aegis_mfa_totp_add']);
+        return null;
+    }
+    return $r;
+}
+
+function aegis_mfa_cancel_totp_add(): void {
+    unset($_SESSION['aegis_mfa_totp_add']);
+}
+
+// verified the same way initial TOTP enrolment is, merged in without touching passkeys or backup codes
+function aegis_mfa_commit_totp_add(string $code): array {
+    $r = aegis_mfa_totp_add_state();
+    if ($r === null) return ['ok' => false, 'reason' => 'no_totp_add'];
+    if (!aegis_totp_verify($r['secret'], $code, 1)) return ['ok' => false, 'reason' => 'bad_code'];
+
+    $user = $r['user'];
+    $wrote = false;
+    aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
+        function ($s) use ($user, $r, &$wrote) {
+            if (($s['users'][$user]['status'] ?? '') !== 'enrolled') return $s;
+            $s['users'][$user]['secret']    = $r['secret'];
+            $s['users'][$user]['algorithm'] = 'SHA1';
+            $s['users'][$user]['digits']    = 6;
+            $s['users'][$user]['period']    = 30;
+            $s['users'][$user]['last_step'] = 0;
+            $wrote = true;
+            return $s;
+        });
+    if (!$wrote) return ['ok' => false, 'reason' => 'not_enrolled'];
+
+    unset($_SESSION['aegis_mfa_totp_add']);
+    return ['ok' => true];
+}
+
+// commits an extra passkey for an *already enrolled* user (Settings "Add a passkey"), distinct from the initial-enrolment path in AegisMfaEnroll.php
+function aegis_mfa_add_passkey(string $user, array $credentialResponse, string $expectedOrigin, string $label = 'Passkey'): array {
+    $challenge = aegis_webauthn_take_challenge($user, 'register');
+    if ($challenge === null) return ['ok' => false, 'reason' => 'challenge_expired'];
+
+    $r = aegis_webauthn_verify_registration($credentialResponse, $challenge, $expectedOrigin, aegis_mfa_webauthn_rp_id());
+    if (!($r['ok'] ?? false)) return $r;
+
+    $label = trim($label) !== '' ? substr(trim($label), 0, 60) : 'Passkey';
+    $entry = [
+        'id'           => aegis_webauthn_b64url_encode($r['credential_id']),
+        'public_key'   => $r['public_key'],
+        'sign_count'   => $r['sign_count'],
+        'created_at'   => time(),
+        'last_used_at' => null,
+        'label'        => $label,
+    ];
+    $added = false;
+    aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
+        function ($s) use ($user, $entry, &$added) {
+            if (($s['users'][$user]['status'] ?? '') !== 'enrolled') return $s;
+            $list = $s['users'][$user]['passkeys'] ?? [];
+            if (!is_array($list)) $list = [];
+            $list[] = $entry;
+            $s['users'][$user]['passkeys'] = $list;
+            $added = true;
+            return $s;
+        });
+    return $added ? ['ok' => true] : ['ok' => false, 'reason' => 'not_enrolled'];
+}
+
+// refuses to strip a user's last second factor (no TOTP, only this passkey) - starting over has its own path, reset_user
+function aegis_mfa_remove_passkey(string $user, string $credentialIdB64Url): array {
+    $sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
+    $rec = $sec['users'][$user] ?? null;
+    if (!is_array($rec) || ($rec['status'] ?? '') !== 'enrolled') {
+        return ['ok' => false, 'reason' => 'not_enrolled'];
+    }
+    $pks = is_array($rec['passkeys'] ?? null) ? $rec['passkeys'] : [];
+    $hasTotp = !empty($rec['secret']);
+    $found = false;
+    foreach ($pks as $pk) {
+        if (is_array($pk) && ($pk['id'] ?? '') === $credentialIdB64Url) { $found = true; break; }
+    }
+    if (!$found) return ['ok' => false, 'reason' => 'not_found'];
+    if (!$hasTotp && count($pks) <= 1) return ['ok' => false, 'reason' => 'last_factor'];
+
+    $removed = false;
+    aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
+        function ($s) use ($user, $credentialIdB64Url, &$removed) {
+            $list = $s['users'][$user]['passkeys'] ?? [];
+            if (!is_array($list)) return $s;
+            $new = array_values(array_filter($list, function ($pk) use ($credentialIdB64Url) {
+                return !(is_array($pk) && ($pk['id'] ?? '') === $credentialIdB64Url);
+            }));
+            if (count($new) === count($list)) return $s;
+            $s['users'][$user]['passkeys'] = $new;
+            $removed = true;
+            return $s;
+        });
+    return ['ok' => $removed, 'reason' => $removed ? null : 'not_found'];
+}
+
+function aegis_mfa_rename_passkey(string $user, string $credentialIdB64Url, string $label): bool {
+    $label = trim($label);
+    if ($label === '') $label = 'Passkey';
+    if (strlen($label) > 60) $label = substr($label, 0, 60);
+    $wrote = false;
+    aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
+        function ($s) use ($user, $credentialIdB64Url, $label, &$wrote) {
+            $list = $s['users'][$user]['passkeys'] ?? null;
+            if (!is_array($list)) return $s;
+            foreach ($list as $i => $pk) {
+                if (is_array($pk) && ($pk['id'] ?? '') === $credentialIdB64Url) {
+                    $s['users'][$user]['passkeys'][$i]['label'] = $label;
+                    $wrote = true;
+                    break;
+                }
+            }
+            return $s;
+        });
+    return $wrote;
+}
+
 function aegis_mfa_admin_summary(?callable $getent = null, ?int $now = null): array {
     $now = $now ?? time();
     $cfg = aegis_mfa_config(true);
@@ -172,6 +325,7 @@ function aegis_mfa_admin_summary(?callable $getent = null, ?int $now = null): ar
             if ($status === 'enrolled') $enrolled++;
             if ($status === 'pending' || $status === 'locked') $pending++;
         }
+        $userPasskeys = is_array($rec['passkeys'] ?? null) ? $rec['passkeys'] : [];
         $users[] = [
             'name'             => $u,
             'status'           => $status,
@@ -179,6 +333,8 @@ function aegis_mfa_admin_summary(?callable $getent = null, ?int $now = null): ar
             'backup_remaining' => aegis_mfa_backup_codes_remaining($u),
             'enrolled_at'      => $rec['enrolled_at'] ?? null,
             'grace_until'      => $rec['grace_until'] ?? null,
+            'has_totp'         => !empty($rec['secret']),
+            'passkeys'         => $userPasskeys,
         ];
     }
 
@@ -209,5 +365,11 @@ function aegis_mfa_admin_summary(?callable $getent = null, ?int $now = null): ar
         'history_on'     => !empty($cfg['lockout_history']),
         'history'        => aegis_mfa_lockout_history($now),
         'users'          => $users,
+
+        'webauthn_configured'     => aegis_mfa_webauthn_configured(),
+        'webauthn_available'      => aegis_mfa_webauthn_available(),
+        'webauthn_rp_origin'      => aegis_mfa_webauthn_rp_origin(),
+        'webauthn_current_origin' => aegis_mfa_webauthn_current_origin(),
+        'webauthn_assume_https'   => !empty($cfg['webauthn_assume_https']),
     ];
 }

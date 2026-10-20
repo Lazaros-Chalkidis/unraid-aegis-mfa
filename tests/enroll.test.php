@@ -328,6 +328,144 @@ $sum = aegis_mfa_admin_summary($fixture, 2000);
 t('summary dry-run true', $sum['dry_run'] === true);
 t('summary enforcing false in dry-run', $sum['enforcing'] === false);
 
+// passkey enrolment path: begin_enrollment(method='passkey') plus a stubbed passkey_cred - a real ceremony needs a browser, that crypto is covered in webauthn.test.php
+aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/secrets.json', ['version' => 1, 'users' => []]);
+$pkEnr = aegis_mfa_begin_enrollment('pkuser', 'Aegis MFA', 'raptor1', 'passkey');
+t('passkey begin method',        $pkEnr['method'] === 'passkey');
+t('passkey begin no secret',     !isset($pkEnr['secret']));
+t('passkey begin 10 backup codes', count($pkEnr['backup_codes']) === 10);
+t('passkey begin state method',  aegis_mfa_enroll_state()['method'] === 'passkey');
+t('passkey begin ok flag unset', aegis_mfa_enroll_state()['passkey_ok'] === false);
+
+$res = aegis_mfa_commit_enrollment($pkEnr['backup_codes'][0]);
+t('passkey commit before verify refused', ($res['ok'] ?? true) === false);
+t('passkey commit before verify reason',  ($res['reason'] ?? '') === 'passkey_not_verified');
+
+// simulate a completed ceremony the way aegis_mfa_verify_enrollment_passkey() would leave it
+$_SESSION['aegis_mfa_enroll']['passkey_ok']   = true;
+$_SESSION['aegis_mfa_enroll']['passkey_cred'] = [
+    'id' => 'test-cred-id', 'public_key' => ['kty' => 2, 'crv' => 1, 'x' => 'eA==', 'y' => 'eQ=='],
+    'sign_count' => 0, 'created_at' => time(), 'last_used_at' => null, 'label' => 'Passkey',
+];
+$confirm = $pkEnr['backup_codes'][3];
+$res = aegis_mfa_commit_enrollment($confirm);
+t('passkey commit ok',           ($res['ok'] ?? false) === true);
+t('passkey commit clears session', aegis_mfa_enroll_state() === null);
+
+$sec = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
+t('passkey user enrolled',          $sec['users']['pkuser']['status'] === 'enrolled');
+t('passkey user no totp secret',    !isset($sec['users']['pkuser']['secret']));
+t('passkey user has one passkey',   count($sec['users']['pkuser']['passkeys']) === 1);
+t('passkey user passkey id',        $sec['users']['pkuser']['passkeys'][0]['id'] === 'test-cred-id');
+t('passkey user backup codes stored', count($sec['users']['pkuser']['backup_codes']) === 10);
+t('passkey user confirm consumed',  $sec['users']['pkuser']['backup_codes_used'] === [3]);
+
+// aegis_mfa_setup_access_ok(): the one shared authorization rule for every pre-2FA surface
+$_SESSION['unraid_user'] = 'pkuser';
+unset($_SESSION['aegis_mfa'], $_SESSION['aegis_mfa_token_ok']);
+t('access ok for a user with no record yet', aegis_mfa_setup_access_ok('freshuser') === true); // status 'none'
+t('access denied for enrolled, unverified, no token', aegis_mfa_setup_access_ok('pkuser') === false);
+aegis_mfa_mark_verified('pkuser');
+t('access ok once session verified', aegis_mfa_setup_access_ok('pkuser') === true);
+unset($_SESSION['aegis_mfa']);
+$_SESSION['aegis_mfa_token_ok'] = ['user' => 'pkuser', 'until' => time() + 3600];
+t('access ok with a valid bypass token', aegis_mfa_setup_access_ok('pkuser') === true);
+$_SESSION['aegis_mfa_token_ok'] = ['user' => 'pkuser', 'until' => time() - 1];
+t('access denied with an expired bypass token', aegis_mfa_setup_access_ok('pkuser') === false);
+unset($_SESSION['aegis_mfa_token_ok']);
+t('access denied for an empty user', aegis_mfa_setup_access_ok('') === false);
+
+// passkey management (AegisMfaAdmin.php): add/remove/rename and the last-factor guard
+aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/secrets.json', ['version' => 1, 'users' => [
+    'onlypasskey' => [
+        'status' => 'enrolled', 'backup_codes' => array_fill(0, 10, 'h'), 'backup_codes_used' => [0],
+        'passkeys' => [['id' => 'pk-a', 'public_key' => [], 'sign_count' => 0, 'label' => 'Only one']],
+    ],
+    'both' => [
+        'status' => 'enrolled', 'secret' => 'X', 'backup_codes' => array_fill(0, 10, 'h'), 'backup_codes_used' => [0],
+        'passkeys' => [['id' => 'pk-b', 'public_key' => [], 'sign_count' => 0, 'label' => 'Backup factor']],
+    ],
+]]);
+
+$r = aegis_mfa_remove_passkey('onlypasskey', 'pk-a');
+t('remove last factor refused', ($r['ok'] ?? true) === false);
+t('remove last factor reason',  ($r['reason'] ?? '') === 'last_factor');
+$sec = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
+t('remove last factor kept the passkey', count($sec['users']['onlypasskey']['passkeys']) === 1);
+
+$r = aegis_mfa_remove_passkey('both', 'pk-b');
+t('remove passkey with a totp backup ok', ($r['ok'] ?? false) === true);
+$sec = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
+t('remove passkey with a totp backup removed', count($sec['users']['both']['passkeys']) === 0);
+
+$r = aegis_mfa_remove_passkey('both', 'no-such-id');
+t('remove unknown passkey id refused', ($r['ok'] ?? true) === false);
+t('remove unknown passkey reason',     ($r['reason'] ?? '') === 'not_found');
+
+t('rename passkey', aegis_mfa_rename_passkey('onlypasskey', 'pk-a', 'My phone') === true);
+$sec = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
+t('rename passkey persisted',   $sec['users']['onlypasskey']['passkeys'][0]['label'] === 'My phone');
+t('rename unknown passkey no-op', aegis_mfa_rename_passkey('onlypasskey', 'nope', 'X') === false);
+
+// adding TOTP to an already-enrolled, passkey-only account (AegisMfaAdmin.php), additive like aegis_mfa_add_passkey
+$_SESSION['unraid_user'] = 'onlypasskey';
+t('begin totp add for an unenrolled account', aegis_mfa_begin_totp_add('nosuchuser') === null);
+
+$add = aegis_mfa_begin_totp_add('onlypasskey');
+t('begin totp add returns a secret', is_array($add) && !empty($add['secret']));
+t('begin totp add returns a uri',    is_array($add) && strpos($add['uri'], 'otpauth://') === 0);
+
+$state = aegis_mfa_totp_add_state();
+t('totp add state visible to the same session', $state !== null && $state['user'] === 'onlypasskey');
+// AegisMfa.page rebuilds the QR from $state['secret'] + $state['user'] at render time, same pattern
+// as the original wizard's setup.php - no derived uri is ever stored, only the secret it comes from,
+// so there's nothing that can go stale or desync between what begin() returned and what gets rendered
+t('totp add state has no stored uri, only the secret it derives from', !array_key_exists('uri', $state));
+t('totp add state can rebuild the same uri begin() returned', is_array($state)
+    && aegis_totp_uri($state['secret'], $state['user'] . '@' . aegis_mfa_server_name(), 'Aegis MFA') === $add['uri']);
+
+$_SESSION['unraid_user'] = 'both';
+t('totp add state hidden from a different session', aegis_mfa_totp_add_state() === null);
+$_SESSION['unraid_user'] = 'onlypasskey';
+
+$r = aegis_mfa_commit_totp_add('000000');
+t('commit totp add rejects a wrong code', ($r['ok'] ?? true) === false);
+t('commit totp add wrong code reason',    ($r['reason'] ?? '') === 'bad_code');
+
+$r = aegis_mfa_commit_totp_add(code_for($add['secret']));
+t('commit totp add accepts the right code', ($r['ok'] ?? false) === true);
+
+$sec = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
+t('totp add wrote the secret',           $sec['users']['onlypasskey']['secret'] === $add['secret']);
+t('totp add kept the existing passkey',  count($sec['users']['onlypasskey']['passkeys']) === 1);
+t('totp add did not touch backup codes', $sec['users']['onlypasskey']['backup_codes_used'] === [0]);
+t('totp add state cleared after commit', aegis_mfa_totp_add_state() === null);
+
+aegis_mfa_begin_totp_add('onlypasskey');
+aegis_mfa_cancel_totp_add();
+t('cancel totp add clears session state', aegis_mfa_totp_add_state() === null);
+
+// webauthn_assume_https: a TLS-terminating proxy leaves $_SERVER['HTTPS'] unset on a real https:// request
+// UI-gate override only, not a security check - verification always checks the origin the browser itself reports
+aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/config.json', ['webauthn_rp_origin' => 'https://tower.example.com']);
+aegis_mfa_config(true);
+$_SERVER['HTTP_HOST'] = 'tower.example.com';
+unset($_SERVER['HTTPS']);
+t('proxy: plain http seen without the flag', aegis_mfa_webauthn_current_origin() === 'http://tower.example.com');
+t('proxy: not available without the flag',   aegis_mfa_webauthn_available() === false);
+
+t('proxy: set assume_https', aegis_mfa_set_webauthn_assume_https(true) === true);
+t('proxy: origin now https with the flag', aegis_mfa_webauthn_current_origin() === 'https://tower.example.com');
+t('proxy: available with the flag',        aegis_mfa_webauthn_available() === true);
+
+t('proxy: unset assume_https', aegis_mfa_set_webauthn_assume_https(false) === true);
+t('proxy: back to http once cleared', aegis_mfa_webauthn_current_origin() === 'http://tower.example.com');
+
+// a real HTTPS connection still works regardless of the flag either way
+$_SERVER['HTTPS'] = 'on';
+t('real https unaffected by the flag', aegis_mfa_webauthn_current_origin() === 'https://tower.example.com');
+unset($_SERVER['HTTPS'], $_SERVER['HTTP_HOST']);
+
 echo "\nenroll.test.php: {$pass} passed, {$fail} failed\n";
 foreach (glob("$work/flash/*") as $g) @unlink($g);
 foreach (glob("$work/state/*") as $g) @unlink($g);

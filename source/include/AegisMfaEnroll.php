@@ -6,6 +6,7 @@
    ========================================================================= */
 
 require_once __DIR__ . '/AegisMfaGate.php';
+require_once __DIR__ . '/AegisMfaWebauthn.php';
 
 function aegis_mfa_csrf_token(): string {
     aegis_mfa_session_ensure();
@@ -20,25 +21,33 @@ function aegis_mfa_csrf_check(string $token): bool {
     return is_string($have) && $have !== '' && hash_equals($have, $token);
 }
 
-// the in-progress secret and codes live in the session, never on disk, so an abandoned wizard leaves no trace
-function aegis_mfa_begin_enrollment(string $user, string $issuer = 'Aegis MFA', ?string $host = null): array {
+// in-progress secret/codes/passkey live in the session, never on disk - an abandoned wizard leaves no trace
+// $method is 'totp' (default, unchanged behaviour) or 'passkey'
+function aegis_mfa_begin_enrollment(string $user, string $issuer = 'Aegis MFA', ?string $host = null, string $method = 'totp'): array {
     aegis_mfa_session_ensure();
-    $secret = aegis_totp_generate_secret();
     list($plain, $hashed) = aegis_mfa_generate_backup_codes(10);
-    $_SESSION['aegis_mfa_enroll'] = [
+    $state = [
         'user'          => $user,
-        'secret'        => $secret,
+        'method'        => $method,
         'backup_plain'  => $plain,
         'backup_hashed' => $hashed,
         'totp_ok'       => false,
+        'passkey_ok'    => false,
+        'passkey_cred'  => null,
         'started'       => time(),
     ];
-    $account = $user . ($host ? '@' . $host : '');
-    return [
-        'secret'       => $secret,
-        'uri'          => aegis_totp_uri($secret, $account, $issuer),
-        'backup_codes' => $plain,
-    ];
+    $result = ['method' => $method, 'backup_codes' => $plain];
+
+    if ($method === 'totp') {
+        $secret = aegis_totp_generate_secret();
+        $state['secret'] = $secret;
+        $account = $user . ($host ? '@' . $host : '');
+        $result['secret'] = $secret;
+        $result['uri'] = aegis_totp_uri($secret, $account, $issuer);
+    }
+
+    $_SESSION['aegis_mfa_enroll'] = $state;
+    return $result;
 }
 
 function aegis_mfa_enroll_state(): ?array {
@@ -54,15 +63,50 @@ function aegis_mfa_verify_enrollment_totp(string $code): bool {
     return true;
 }
 
-// only a code-confirmed enrolment is written to secrets.json
-function aegis_mfa_commit_enrollment(string $backupConfirm): array {
+// completes the passkey half of the wizard: verifies against this session's challenge, holds the credential until backup-code confirmation commits it
+function aegis_mfa_verify_enrollment_passkey(array $credentialResponse, string $expectedOrigin): array {
     $e = aegis_mfa_enroll_state();
-    if ($e === null || empty($e['secret']) || empty($e['user'])) {
+    if ($e === null || ($e['method'] ?? '') !== 'passkey' || empty($e['user'])) {
         return ['ok' => false, 'reason' => 'no_enrollment'];
     }
-    if (empty($e['totp_ok'])) {
+    $challenge = aegis_webauthn_take_challenge($e['user'], 'register');
+    if ($challenge === null) return ['ok' => false, 'reason' => 'challenge_expired'];
+
+    $r = aegis_webauthn_verify_registration($credentialResponse, $challenge, $expectedOrigin, aegis_mfa_webauthn_rp_id());
+    if (!($r['ok'] ?? false)) return $r;
+
+    $_SESSION['aegis_mfa_enroll']['passkey_ok']   = true;
+    $_SESSION['aegis_mfa_enroll']['passkey_cred'] = [
+        'id'           => aegis_webauthn_b64url_encode($r['credential_id']),
+        'public_key'   => $r['public_key'],
+        'sign_count'   => $r['sign_count'],
+        'created_at'   => time(),
+        'last_used_at' => null,
+        'label'        => 'Passkey',
+    ];
+    return ['ok' => true];
+}
+
+// only a confirmed enrolment (verified TOTP secret or verified passkey) is written to secrets.json, backup code confirmation required either way
+function aegis_mfa_commit_enrollment(string $backupConfirm): array {
+    $e = aegis_mfa_enroll_state();
+    if ($e === null || empty($e['user'])) {
+        return ['ok' => false, 'reason' => 'no_enrollment'];
+    }
+    $method = $e['method'] ?? 'totp';
+    if ($method === 'totp' && empty($e['secret'])) {
+        return ['ok' => false, 'reason' => 'no_enrollment'];
+    }
+    if ($method === 'totp' && empty($e['totp_ok'])) {
         return ['ok' => false, 'reason' => 'totp_not_verified'];
     }
+    if ($method === 'passkey' && (empty($e['passkey_ok']) || empty($e['passkey_cred']))) {
+        return ['ok' => false, 'reason' => 'passkey_not_verified'];
+    }
+    if ($method !== 'totp' && $method !== 'passkey') {
+        return ['ok' => false, 'reason' => 'no_enrollment'];
+    }
+
     $norm = strtolower(str_replace('-', '', $backupConfirm));
     $usedIndex = -1;
     foreach ($e['backup_plain'] as $i => $code) {
@@ -72,19 +116,25 @@ function aegis_mfa_commit_enrollment(string $backupConfirm): array {
 
     $user = $e['user'];
     $ok = aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
-        function ($sec) use ($user, $e, $usedIndex) {
+        function ($sec) use ($user, $e, $method, $usedIndex) {
             if (!isset($sec['users']) || !is_array($sec['users'])) $sec['users'] = [];
-            $sec['users'][$user] = [
+            $rec = [
                 'status'            => 'enrolled',
-                'secret'            => $e['secret'],
-                'algorithm'         => 'SHA1',
-                'digits'            => 6,
-                'period'            => 30,
                 'enrolled_at'       => time(),
-                'last_step'         => 0,
                 'backup_codes'      => $e['backup_hashed'],
                 'backup_codes_used' => [$usedIndex],
             ];
+            if ($method === 'totp') {
+                $rec['secret']    = $e['secret'];
+                $rec['algorithm'] = 'SHA1';
+                $rec['digits']    = 6;
+                $rec['period']    = 30;
+                $rec['last_step'] = 0;
+                $rec['passkeys']  = [];
+            } else {
+                $rec['passkeys'] = [$e['passkey_cred']];
+            }
+            $sec['users'][$user] = $rec;
             if (!isset($sec['version'])) $sec['version'] = 1;
             return $sec;
         });
@@ -92,6 +142,16 @@ function aegis_mfa_commit_enrollment(string $backupConfirm): array {
 
     unset($_SESSION['aegis_mfa_enroll']);
     return ['ok' => true];
+}
+
+// access rule for setup/registration: a valid bypass token, an already-verified session, or no completed enrolment yet (pending/locked/none)
+// shared by setup.php and the webauthn.* endpoints, so this decision lives in one place, not two that can drift
+function aegis_mfa_setup_access_ok(string $user): bool {
+    if ($user === '') return false;
+    $tok = $_SESSION['aegis_mfa_token_ok'] ?? null;
+    if (is_array($tok) && ($tok['user'] ?? '') === $user && (int)($tok['until'] ?? 0) > time()) return true;
+    if (aegis_mfa_session_verified()) return true;
+    return in_array(aegis_mfa_user_status($user), ['pending', 'locked', 'none'], true);
 }
 
 function aegis_mfa_cancel_enrollment(): void {

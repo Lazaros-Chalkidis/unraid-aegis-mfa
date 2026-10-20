@@ -7,6 +7,7 @@
 
 require_once __DIR__ . '/AegisMfaTotp.php';
 require_once __DIR__ . '/AegisMfaHelpers.php';
+require_once __DIR__ . '/AegisMfaWebauthn.php';
 
 // the gate the patched Unraid files call, true = let through. every error path returns true, never lock anyone out over our bug
 function aegis_mfa_passed(): bool {
@@ -24,7 +25,7 @@ function aegis_mfa_passed(): bool {
 
         if (aegis_mfa_session_verified()) return true;
 
-        if (aegis_mfa_request_is_setup()) return true;
+        if (aegis_mfa_request_is_setup() || aegis_mfa_request_is_webauthn_endpoint()) return true;
 
         $amfaPrompt = aegis_mfa_request_is_navigation()
             || (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['aegis_mfa_code']));
@@ -50,6 +51,19 @@ function aegis_mfa_request_is_setup(): bool {
     $uri = $_SERVER['REQUEST_URI'] ?? '';
     if (!is_string($uri) || $uri === '') return false;
     return parse_url($uri, PHP_URL_PATH) === '/plugins/aegis.mfa/include/setup.php';
+}
+
+// same exemption as setup.php, same reason: enroll.* is part of the wizard, login.* IS the 2FA check for a session that hasn't passed it yet
+// each endpoint still enforces its own fine-grained auth, so exempting the coarse outer gate here does not weaken anything
+function aegis_mfa_request_is_webauthn_endpoint(): bool {
+    $uri = $_SERVER['REQUEST_URI'] ?? '';
+    if (!is_string($uri) || $uri === '') return false;
+    return in_array(parse_url($uri, PHP_URL_PATH), [
+        '/plugins/aegis.mfa/include/webauthn.enroll.begin.php',
+        '/plugins/aegis.mfa/include/webauthn.enroll.finish.php',
+        '/plugins/aegis.mfa/include/webauthn.login.begin.php',
+        '/plugins/aegis.mfa/include/webauthn.login.finish.php',
+    ], true);
 }
 
 // deliberately not exempt: it carries the Disable button, and recovery never needs the webGUI
@@ -104,6 +118,53 @@ function aegis_mfa_verify_submission(string $user, string $code, ?int $now = nul
     } catch (\Throwable $e) {
 
         @error_log('aegis-mfa verify: ' . $e->getMessage());
+        return ['ok' => false, 'remaining' => 1];
+    }
+}
+
+// mirrors aegis_mfa_verify_submission(): lockout checked before any crypto, any error denies, same IP lockout counters as a bad code
+function aegis_mfa_verify_passkey_assertion(string $user, array $credentialResponse, ?int $now = null): array {
+    $now = $now ?? time();
+    try {
+        $ip = aegis_mfa_client_ip();
+
+        if (aegis_mfa_is_locked($ip, $now)) {
+            return ['ok' => false, 'locked' => true, 'retry_after' => aegis_mfa_lock_remaining($ip, $now)];
+        }
+
+        // one-shot, consumed regardless of outcome: a probing/malformed request must not leave a reusable challenge behind
+        $challenge = aegis_webauthn_take_challenge($user, 'login', 300, $now);
+        $credId = $credentialResponse['id'] ?? null;
+        $stored = is_string($credId) ? aegis_mfa_webauthn_find_passkey($user, $credId) : null;
+
+        $ok = false;
+        if ($challenge !== null && $stored !== null) {
+            $r = aegis_webauthn_verify_assertion(
+                $credentialResponse, $stored, $challenge,
+                aegis_mfa_webauthn_rp_origin(), aegis_mfa_webauthn_rp_id()
+            );
+            if ($r['ok'] ?? false) {
+                $ok = aegis_mfa_webauthn_record_use($user, $credId, (int)$r['sign_count'], $now);
+            }
+        }
+
+        if ($ok) {
+            aegis_mfa_clear_failures($ip);
+            aegis_mfa_mark_verified($user);
+            @syslog(LOG_INFO, "aegis-mfa: 2FA success for $user from $ip (passkey)");
+            return ['ok' => true, 'method' => 'passkey'];
+        }
+
+        $remaining = aegis_mfa_record_failure($ip, $user, $now);
+        @syslog(LOG_WARNING, "aegis-mfa: 2FA failure for $user from $ip (passkey)");
+        if ($remaining <= 0) {
+            return ['ok' => false, 'locked' => true, 'retry_after' => aegis_mfa_lock_remaining($ip, $now)];
+        }
+        return ['ok' => false, 'remaining' => $remaining];
+
+    } catch (\Throwable $e) {
+
+        @error_log('aegis-mfa verify passkey: ' . $e->getMessage());
         return ['ok' => false, 'remaining' => 1];
     }
 }
