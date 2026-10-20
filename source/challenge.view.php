@@ -54,8 +54,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['aegis_mfa_code'])) {
 }
 
 $amfaCsrf   = aegis_mfa_csrf_token();
+$amfaUnraidCsrf = (string)(aegis_mfa_var_ini()['csrf_token'] ?? '');
 $amfaTime   = date('H:i:s T');
 $amfaEsc    = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+
+$amfaPasskeysOffered = $amfaStatus === 'enrolled'
+    && aegis_mfa_webauthn_available()
+    && aegis_mfa_webauthn_passkeys($amfaUser);
 
 require_once '/usr/local/emhttp/plugins/aegis.mfa/include/AegisMfaShell.php';
 
@@ -100,6 +105,12 @@ if ($amfaStatus === 'pending' || $amfaStatus === 'locked') {
                            autofocus <?= $amfaLockSeconds > 0 ? 'disabled' : '' ?>>
                     <button type="submit" class="amfa-btn" <?= $amfaLockSeconds > 0 ? 'disabled' : '' ?>>Verify</button>
                 </form>
+                <?php if ($amfaPasskeysOffered): ?>
+                <p class="amfa-skip" style="margin-top: 1rem;">
+                    <a href="#" id="amfaPkBtn">Use a passkey instead</a>
+                </p>
+                <p class="amfa-error" id="amfaPkErr" style="display:none;"></p>
+                <?php endif; ?>
                 <?php if ($amfaError !== ''): ?>
                 <p class="amfa-error">
                     <?= $amfaEsc($amfaError) ?>
@@ -113,6 +124,29 @@ if ($amfaStatus === 'pending' || $amfaStatus === 'locked') {
             <div class="amfa-shieldbox"><?= aegis_mfa_shell_shield() ?></div>
         </div>
         <p class="amfa-hint">You can also enter one of your backup codes (xxxxx-xxxxx).</p>
+<?php if ($amfaPasskeysOffered): ?>
+<script>
+<?= aegis_mfa_webauthn_js() ?>
+(function () {
+    var btn = document.getElementById('amfaPkBtn');
+    var err = document.getElementById('amfaPkErr');
+    if (!btn) return;
+    if (!amfaWebauthnSupported()) { btn.parentNode.style.display = 'none'; return; }
+    btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        err.style.display = 'none';
+        btn.textContent = 'Waiting for your passkey...';
+        amfaWebauthnLogin('<?= $amfaEsc($amfaCsrf) ?>', '<?= $amfaEsc($amfaUnraidCsrf) ?>', function (fin) {
+            window.location.href = fin.redirect || '/';
+        }, function (reason) {
+            btn.textContent = 'Use a passkey instead';
+            err.textContent = 'Passkey sign-in did not complete (' + reason + '). Try again, or use your code.';
+            err.style.display = 'block';
+        });
+    });
+})();
+</script>
+<?php endif; ?>
 <?php
 }
 

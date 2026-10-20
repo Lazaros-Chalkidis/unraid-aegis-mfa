@@ -1,5 +1,7 @@
 # Aegis MFA for Unraid
 
+> **Screenshots coming soon.** This branch adds passkeys and an "Add an authenticator app" option to Settings. The screenshots further down predate these and don't show them yet, new ones will follow.
+
 Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app. 
 Backup codes, a trusted LAN bypass, and lockout protection. It protects root, the only account the Unraid webGUI accepts.
 
@@ -22,6 +24,7 @@ The whole design is built around one rule: a fault must never lock you out. Ever
 ## Features
 
 - TOTP codes: Works with Google Authenticator, Authy, 1Password, Bitwarden, or any RFC 6238 app. No cloud, no push, no account
+- Passkeys: Face/fingerprint/PIN or a hardware security key, verified with a from-scratch WebAuthn implementation (ES256 only, no third-party library). Bound to one address you configure, works alongside or instead of an authenticator app - see "Passkeys" below for the address requirement
 - Root only: On current Unraid, root is the only account the webGUI login accepts, so root is who enrols, with its own secret and its own backup codes. The plugin does not hardcode root, it reads the account list the same way .login.php does, so it stays correct if that ever changes. Share users appear in the list marked as having no webGUI sign-in, outside the count and without enrolment buttons
 - Setup wizard: Scan a QR, confirm a code, save your backup codes. The QR is generated on the server, so the secret never leaves the machine
 - Backup codes: Ten single-use codes, shown once. Enrolment does not finish until you type one back, which proves you actually saved them. Re-issuing them later takes the same path, and the codes you already have keep working until you confirm the new ones
@@ -67,7 +70,9 @@ The backup code and `aegis-mfa disable` are the everyday paths, the flag on the 
 
 ## Scope and limits
 
-Aegis MFA guards the webGUI login and nothing else. SSH, SMB, NFS, and Docker containers are not affected: they never went through the webGUI login in the first place. It is TOTP only, so no push notifications, no SMS, no hardware keys. Secrets and backup codes are stored on the boot device, so anyone who can read that device outside the server can read them, which is also true of the passwords already stored there. The trusted LAN bypass is exactly what it says: a request from a trusted subnet skips the code, so it is only as safe as the network you name.
+Aegis MFA guards the webGUI login and nothing else. SSH, SMB, NFS, and Docker containers are not affected: they never went through the webGUI login in the first place. Second factors are TOTP and passkeys; there is no push notification and no SMS. Secrets, passkey public keys, and backup codes are stored on the boot device, so anyone who can read that device outside the server can read them, which is also true of the passwords already stored there. The trusted LAN bypass is exactly what it says: a request from a trusted subnet skips the code, so it is only as safe as the network you name.
+
+Passkeys need a real HTTPS address: WebAuthn cryptographically binds a credential to one origin, so a passkey only works from the single address you configure (see "Passkeys" below), and browsers refuse WebAuthn entirely over plain HTTP. If you only ever reach the webGUI over a bare LAN IP without a certificate, passkeys are not available to you - the authenticator app and backup codes work everywhere regardless. The verifier supports ES256 (EC/P-256) authenticators only: Apple Touch/Face ID, Android, FIDO2 security keys, and Windows Hello on TPM 2.0 hardware all use it; very old or software-only Windows Hello setups that fall back to RSA are not supported.
 
 ## Requirements
 
@@ -128,6 +133,7 @@ The dry-run exists so that a clock problem, a mistyped secret, or an unexpected 
 - Enforce now: End the 24-hour dry-run early, once you have confirmed it works
 - Trusted LAN: Networks that skip the code prompt, one CIDR or IP per line, IPv4 and IPv6. The password is still required. When the address you are on is on the list, the page says so at the top, since an exempt browser otherwise looks identical to a protected one
 - Grace period: How many days root has to enrol after the first sync before the setup screen becomes mandatory. Two by default, and worth keeping short: while the window is open, anyone with the password can reach the wizard, so enrol as soon as you turn MFA on
+- Passkeys: The address (e.g. `https://tower.mydomain.com`) passkeys are bound to, blank by default. Set it to whichever address you use over HTTPS and the setup wizard offers "Passkey" as a method alongside the authenticator app; open the settings page from that same address to add, rename, or remove passkeys per account. Other addresses keep working with the code and backup codes, just not a passkey
 - Lockout history: Blocked addresses, with Unlock to release one now, Delete for a spent entry and Clear for every expired one. The Keep history switch controls whether they survive a reboot, nothing else
 - Account row: New backup codes, a 2FA reset, or a one-time setup link for when the authenticator is lost. Accounts that cannot sign in to the webGUI have none of these
 - Sync accounts: Reconcile the enrolment list against Unraid's own account list. Runs on its own at boot and every ten minutes
@@ -161,12 +167,17 @@ The patches are re-applied by two independent mechanisms: an event hook at boot 
 
 Codes are standard TOTP (RFC 6238, SHA1, 6 digits, 30 seconds) with a one-step window either side, which tolerates about thirty seconds of clock drift. A code is compared in constant time, and the step it matched is recorded, so the same code cannot be used twice. Backup codes are bcrypt-hashed and single-use. Secrets and backup codes live on the boot device. The lockout counters live in RAM, so the request path never writes to the boot device at all; the lockout history, when you keep it, is a snapshot the ten-minute cron writes, and only when the set has actually changed.
 
+Passkeys are verified by a WebAuthn implementation written from scratch for this plugin (no Composer, matching the rest of the codebase): a small CBOR decoder, COSE key parsing restricted to EC2/P-256/ES256, and signature verification through PHP's own OpenSSL bindings. Only `authData` is parsed for the credential id and public key; the attestation statement itself (which authenticator manufacturer made the key) is never verified, since trust here is the browser's own WebAuthn UI and the user's gesture, not a device certificate chain. A registration or login is rejected outright if it uses any algorithm other than ES256, if the origin or challenge in `clientData` doesn't match exactly, or if the signature counter fails to increase over what was last stored (guards against a cloned authenticator) - every one of those is a hard fail, same fail-closed rule as the TOTP verifier's "any error denies".
+
+The four passkey endpoints (`webauthn.*.php`) are the only places in this plugin that POST a raw JSON body instead of a normal HTML form. That matters because Unraid's own webGUI carries a second, independent CSRF layer ahead of anything this plugin does: `webGui/include/local_prepend.php` runs as a PHP `auto_prepend_file` before every script on every POST, and terminates the request immediately - silently, with no output at all - unless it finds Unraid's own `csrf_token` (from `state/var.ini`) either as a POST field or as an `X-Csrf-Token` header. A normal `<form method="post">` submission carries that token as a hidden field without anyone having to think about it; a JSON `fetch()` body doesn't touch `$_POST` at all, so the four endpoints send it explicitly as a header instead (see `aegis_mfa_webauthn_js()` in `AegisMfaShell.php`). Any future endpoint that POSTs a non-form body needs to do the same, or it will fail with an empty response that gives no hint why - `tests/requires.test.php` catches a *missing require* for the functions involved, but this native-CSRF requirement is enforced entirely outside this plugin's own code and isn't something a unit test running off this repo alone can see.
+
 ## Development
 
 ### Requirements
 - Unraid 7.3.1 or later (for testing)
 - PHP CLI and Bash (for the build script and the test suite)
 - Python 3 with OpenCV, optional, for the QR decode cross-check
+- On Windows specifically: `webauthn.test.php` generates a real EC keypair via `openssl_pkey_new()`, which needs a working `openssl.cnf`. A Windows PHP build (e.g. from scoop) may not find one by default (`openssl_pkey_new()` silently returns `false`) - point `OPENSSL_CONF` at the one PHP ships (`<php install dir>\extras\ssl\openssl.cnf`) before running the tests. Linux PHP, including Unraid's, finds its system one automatically and needs nothing extra
 
 ### Build
 ```bash
@@ -182,7 +193,7 @@ The build runs the test suite first and refuses to package if anything fails. A 
 ./tests/run-all.sh
 ```
 
-546 checks across seven suites, none of which need an Unraid box: TOTP against the RFC 6238 and RFC 4226 vectors, the helpers (including a real two-process `flock` contention test), the gate's decision matrix and every fail-open path, the installer against throwaway copies of the two Unraid files (patch, rollback, atomicity, simulated OS updates), the enrolment state machine, the QR encoder, whose output is decoded back with OpenCV to prove it actually scans, and the pure-bash recovery script against real patched fixtures.
+Hundreds of checks across nine suites, none of which need an Unraid box: TOTP against the RFC 6238 and RFC 4226 vectors, WebAuthn (CBOR decoding against RFC 8949 vectors, COSE/ES256 signature verification against a real generated keypair, full registration and assertion ceremonies, sign-count replay rejection), a static require-completeness check that parses every source file's actual `require_once` chain and flags any `aegis_*()` call nothing in that chain defines (the exact bug class a function-level unit test can't see, since the test file supplies its own requires rather than the shipped file's), the helpers (including a real two-process `flock` contention test), the gate's decision matrix and every fail-open path, the installer against throwaway copies of the two Unraid files (patch, rollback, atomicity, simulated OS updates), the enrolment state machine for both methods, the QR encoder, whose output is decoded back with OpenCV to prove it actually scans, and the pure-bash recovery script against real patched fixtures.
 
 ### Project structure
 
@@ -191,14 +202,16 @@ unraid-aegis-mfa/
 ├── source/
 │   ├── include/
 │   │   ├── AegisMfaTotp.php      TOTP core (RFC 6238)
+│   │   ├── AegisMfaWebauthn.php  WebAuthn/passkey core: CBOR, COSE/ES256, ceremony verification
 │   │   ├── AegisMfaHelpers.php   session, JSON+flock, CIDR, users, lockout
 │   │   ├── AegisMfaGate.php      aegis_mfa_passed(), the fail-open gate
 │   │   ├── AegisMfaInstall.php   the patcher and its safety rails
-│   │   ├── AegisMfaEnroll.php    enrolment state machine, CSRF, bypass tokens
-│   │   ├── AegisMfaAdmin.php     settings actions and the dashboard summary
+│   │   ├── AegisMfaEnroll.php    enrolment state machine (TOTP or passkey), CSRF, bypass tokens
+│   │   ├── AegisMfaAdmin.php     settings actions, passkey management, the dashboard summary
 │   │   ├── AegisMfaQr.php        QR wrapper
-│   │   ├── AegisMfaShell.php     the shared login-card shell for the pre-auth pages
+│   │   ├── AegisMfaShell.php     the shared login-card shell and WebAuthn JS for the pre-auth pages
 │   │   ├── setup.php             the enrolment wizard (served by nginx)
+│   │   ├── webauthn.*.php        the four thin JSON endpoints for the browser's WebAuthn ceremonies
 │   │   └── vendor/qrcode.php     QR encoder (MIT, Kazuhiko Arase)
 │   ├── scripts/
 │   │   ├── aegis-mfa             the CLI, symlinked to /usr/local/sbin

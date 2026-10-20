@@ -1399,6 +1399,74 @@
 .amfa-regen-input:focus { outline: none; border-color: var(--amfa-accent); }
 .amfa-regen-btns { display: flex; gap: 8px; margin-top: 12px; }
 
+/* per-user second-factor chips (TOTP + passkeys) */
+.amfa-factors-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--amfa-c-border-row);
+}
+.amfa-pk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 9px;
+  border-radius: 12px;
+  background: rgba(74,144,226,.1);
+  border: 1px solid rgba(74,144,226,.35);
+  color: var(--amfa-c-text-mid);
+  font-size: 11px;
+}
+.amfa-pk-chip .fa-key { color: var(--amfa-blue); }
+.amfa-pk-remove {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 16px !important; height: 16px !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  color: var(--amfa-c-text-faint) !important;
+  cursor: pointer;
+  font-size: 10px !important;
+}
+.amfa-pk-remove:hover { color: #e05252 !important; }
+.amfa-pk-add {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px !important;
+  border-radius: 12px !important;
+  border: 1px dashed var(--amfa-c-border-strong) !important;
+  background: transparent !important;
+  color: var(--amfa-c-text-mid) !important;
+  cursor: pointer;
+  font-size: 11px !important;
+}
+.amfa-pk-add:hover { border-color: var(--amfa-accent) !important; color: var(--amfa-accent) !important; }
+.amfa-pk-add:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Add an authenticator app: QR + manual secret, shown while a totp-add is pending confirmation */
+.amfa-totp-add-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.amfa-qr-mini { flex-shrink: 0; width: 120px; height: 120px; background: #fff; border: 1px solid var(--amfa-ctrl-border); padding: 6px; }
+.amfa-qr-mini svg { width: 100%; height: 100%; display: block; }
+.amfa-secret {
+  background: var(--amfa-ctrl-bg);
+  border: 1px solid var(--amfa-ctrl-border);
+  border-radius: 4px;
+  color: var(--amfa-c-text);
+  padding: 8px 10px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12.5px;
+  letter-spacing: .05em;
+  user-select: all;
+  word-break: break-all;
+}
+
 .amfa-users-top {
   display: flex;
   justify-content: space-between;

@@ -10,5 +10,7 @@
         "lock_seconds": 900
     },
     "lockout_history": true,
-    "grace_period_days": 2
+    "grace_period_days": 2,
+    "webauthn_rp_origin": "",
+    "webauthn_assume_https": false
 }

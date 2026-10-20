@@ -171,6 +171,24 @@ t('enrolled unverified, other url -> challenge', aegis_mfa_passed() === false);
 $_SERVER['REQUEST_URI'] = $SETUP;
 t('enrolled unverified, setup url -> allow', aegis_mfa_passed() === true);
 
+// the passkey ceremony endpoints need the same exemption, or nginx's auth_request layer intercepts the JSON request and hands back an empty 401
+$WEBAUTHN_PATHS = [
+    '/plugins/aegis.mfa/include/webauthn.enroll.begin.php',
+    '/plugins/aegis.mfa/include/webauthn.enroll.finish.php',
+    '/plugins/aegis.mfa/include/webauthn.login.begin.php',
+    '/plugins/aegis.mfa/include/webauthn.login.finish.php',
+];
+foreach ($WEBAUTHN_PATHS as $wp) {
+    $_SERVER['REQUEST_URI'] = $wp;
+    t("enrolled unverified, webauthn endpoint allowed: $wp", aegis_mfa_passed() === true);
+}
+foreach ([$WEBAUTHN_PATHS[0] . '.evil', $WEBAUTHN_PATHS[0] . 'x', '/x' . $WEBAUTHN_PATHS[0],
+          '/plugins/aegis.mfa/include/webauthn.enroll.begin.phpx',
+          '/plugins/aegis.mfa/webauthn.enroll.begin.php'] as $bad) {
+    $_SERVER['REQUEST_URI'] = $bad;
+    t("webauthn path trick gated: $bad", aegis_mfa_passed() === false);
+}
+
 foreach ([$SETUP . '.evil', $SETUP . '/x', '/x' . $SETUP,
           '/plugins/aegis.mfa/include/setup.phpx', '/plugins/aegis.mfa/setup.php', '/' . $SETUP] as $bad) {
     $_SERVER['REQUEST_URI'] = $bad;
@@ -207,6 +225,12 @@ $_POST = [];
 // the wizard stays exempt or a pending user loops between /login and the challenge
 $_SERVER['REQUEST_URI'] = '/plugins/aegis.mfa/include/setup.php';
 t('setup url still allowed', aegis_mfa_passed() === true);
+
+// fully enforcing is the branch that unconditionally denies an enrolled-unverified session - exactly where the webauthn endpoints must stay reachable
+foreach ($WEBAUTHN_PATHS as $wp) {
+    $_SERVER['REQUEST_URI'] = $wp;
+    t("enforcing, webauthn endpoint still allowed: $wp", aegis_mfa_passed() === true);
+}
 
 set_secrets(['users' => ['root' => ['status' => 'pending', 'grace_until' => time() + 3600]]]);
 login_as('root');

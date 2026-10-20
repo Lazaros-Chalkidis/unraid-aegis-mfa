@@ -144,6 +144,8 @@ function aegis_mfa_config(bool $reload = false): array {
         'lockout'           => ['threshold' => 5, 'window_seconds' => 300, 'lock_seconds' => 900],
         'lockout_history'   => true,
         'grace_period_days' => 2,
+        'webauthn_rp_origin'=> '',
+        'webauthn_assume_https' => false,
     ];
     $file = aegis_mfa_read_json(aegis_mfa_flash() . '/config.json');
     if (!is_array($file)) $file = [];
@@ -168,6 +170,47 @@ function aegis_mfa_enabled(): bool {
 
 function aegis_mfa_enforcing(?int $now = null): bool {
     return ($now ?? time()) >= (int)(aegis_mfa_config()['enforce_after'] ?? 0);
+}
+
+// scheme+host of the configured passkey origin, "" until an admin sets one
+function aegis_mfa_webauthn_rp_origin(): string {
+    $o = trim((string)(aegis_mfa_config()['webauthn_rp_origin'] ?? ''));
+    return $o;
+}
+
+function aegis_mfa_webauthn_configured(): bool {
+    return aegis_mfa_webauthn_rp_origin() !== '';
+}
+
+// the WebAuthn rp.id: hostname only, no scheme, no port
+function aegis_mfa_webauthn_rp_id(): string {
+    $host = parse_url(aegis_mfa_webauthn_rp_origin(), PHP_URL_HOST);
+    return is_string($host) ? $host : '';
+}
+
+// scheme+host of the request actually being served right now
+// a TLS-terminating reverse proxy (NPM, Traefik, a Cloudflare Tunnel) leaves $_SERVER['HTTPS'] unset even on a real https:// request - this is the admin saying so
+// UI gate only, never the security check: verification always checks the origin clientDataJSON itself reports
+function aegis_mfa_webauthn_current_origin(): string {
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || !empty(aegis_mfa_config()['webauthn_assume_https']);
+    $host = (string)($_SERVER['HTTP_HOST'] ?? '');
+    if ($host === '') return '';
+    return ($https ? 'https://' : 'http://') . $host;
+}
+
+// gates every passkey button in the UI, not itself a security boundary: verification always re-checks clientDataJSON.origin regardless
+function aegis_mfa_webauthn_available(): bool {
+    if (!aegis_mfa_webauthn_configured()) return false;
+    $cur = aegis_mfa_webauthn_current_origin();
+    return $cur !== '' && strcasecmp($cur, aegis_mfa_webauthn_rp_origin()) === 0;
+}
+
+function aegis_mfa_webauthn_valid_origin(string $origin): bool {
+    $origin = trim($origin);
+    if (!preg_match('#^https://[^/\s]+$#i', $origin)) return false;
+    $host = parse_url($origin, PHP_URL_HOST);
+    return is_string($host) && $host !== '';
 }
 
 function aegis_mfa_cidr_match(string $ip, string $cidr): bool {

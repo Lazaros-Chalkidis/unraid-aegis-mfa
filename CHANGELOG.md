@@ -1,6 +1,21 @@
 
 # Aegis MFA
 
+## Version 2026.09.08
+
+### Added
+- Passkeys as a second factor: face/fingerprint/PIN or a hardware security key, alongside or instead of an authenticator app. Verified by a from-scratch WebAuthn implementation (ES256 only, no third-party library), consistent with the rest of the codebase
+- A new setup step lets you choose an authenticator app or a passkey; backup codes are generated and required either way, unchanged from before
+- Settings > Aegis MFA gets a Passkeys section: the HTTPS address a passkey is bound to, and per-account add/rename/remove, with a guard against removing an account's only remaining second factor
+- The login challenge offers "Use a passkey instead" whenever one is registered and the address matches
+- A "behind an HTTPS-terminating reverse proxy" toggle for the passkey address, for setups like Nginx Proxy Manager where Unraid itself only ever sees the plain-HTTP side of the connection
+
+### Security
+- A passkey's signature counter must increase each time it's used, rejecting a cloned authenticator
+- Passkey attempts count against the same per-IP lockout as TOTP codes
+
+Contributed by [Sebastian Oehm](https://github.com/SebastianOehm)
+
 ## Version 2026.07.31
 
 ### Security
