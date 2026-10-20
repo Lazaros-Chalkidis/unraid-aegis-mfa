@@ -1,7 +1,5 @@
 # Aegis MFA for Unraid
 
-> **Screenshots coming soon.** This branch adds passkeys and an "Add an authenticator app" option to Settings. The screenshots further down predate these and don't show them yet, new ones will follow.
-
 Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app. 
 Backup codes, a trusted LAN bypass, and lockout protection. It protects root, the only account the Unraid webGUI accepts.
 
@@ -41,17 +39,30 @@ The whole design is built around one rule: a fault must never lock you out. Ever
 - Watchdog alert: An Unraid notification fires if MFA is on but the login patches are missing, and once more when protection returns
 - Ways back in: Backup codes, `aegis-mfa disable` over SSH or the local console, the pure-bash `recover.sh` for when even that will not run, and a `DISABLE.flag` file on a USB boot drive
 
-**GUI Widget Screenshot**
+**Login and setup**
 
-![Gui](screenshots/setup1.png)
-
-![Gui](screenshots/setup2.png)
-
-![Gui](screenshots/setup3.png)
-
-![Gui](screenshots/setup4.png)
-
-![Gui](screenshots/setup5.png)
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="screenshots/setup1.png" width="400" alt="Setup reminder during the grace period"><br><sub>Setup reminder during the grace period</sub></td>
+    <td align="center" width="50%"><img src="screenshots/setup2.png" width="400" alt="The &quot;Locked Out?&quot; help"><br><sub>The "Locked Out?" help</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="screenshots/setup-method.png" width="400" alt="Choose an authenticator app or a passkey"><br><sub>Choose an authenticator app or a passkey</sub></td>
+    <td align="center" width="50%"><img src="screenshots/setup3.png" width="400" alt="Scan the QR code"><br><sub>Scan the QR code</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="screenshots/setup4.png" width="400" alt="Confirm a code from the app"><br><sub>Confirm a code from the app</sub></td>
+    <td align="center" width="50%"><img src="screenshots/setup5.png" width="400" alt="Save the backup codes"><br><sub>Save the backup codes</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="screenshots/setup-passkey.png" width="400" alt="Create a passkey"><br><sub>Create a passkey</sub></td>
+    <td align="center" width="50%"><img src="screenshots/setup-passkey-codes.png" width="400" alt="Backup codes after a passkey"><br><sub>Backup codes after a passkey</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="screenshots/challenge.png" width="400" alt="The code prompt, with the passkey option"><br><sub>The code prompt, with the passkey option</sub></td>
+    <td width="50%"></td>
+  </tr>
+</table>
 
 
 ## How you get back in
@@ -140,9 +151,17 @@ The dry-run exists so that a clock problem, a mistyped secret, or an unexpected 
 
 The settings page is behind the code prompt like every other page. It carries the Disable button, so a session that has only passed the password does not reach it. If you are locked out, use one of the ways back in described above, none of which goes through the webGUI.
 
-**Settings Page**
+**Settings page**
 
-![Settings](screenshots/settings.png)
+![Settings > Aegis MFA](screenshots/settings.png)
+
+**An account with an authenticator app and a passkey**
+
+![Account row with both factors](screenshots/settings-passkeys.png)
+
+**Adding an authenticator app to a passkey-only account**
+
+![Add an authenticator app](screenshots/settings-add-totp.png)
 
 ## Command line
 
