@@ -181,6 +181,86 @@ h1 { font-size: 2.6rem; font-weight: 700; }
 <?php
 }
 
+// shared WebAuthn JS for the two pre-auth pages (challenge.view.php, setup.php) - returned as a bare string, not a <script> tag
+// both pages inline their own CSS/JS since no asset is guaranteed to be served before auth, so each caller wraps this in its own <script> block
+function aegis_mfa_webauthn_js(): string {
+    return <<<'JS'
+function amfaB64uToBuf(s) {
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    var bin = atob(s), buf = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+}
+function amfaBufToB64u(buf) {
+    var bytes = new Uint8Array(buf), bin = '';
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function amfaPrepCreateOptions(o) {
+    o.challenge = amfaB64uToBuf(o.challenge);
+    o.user.id = amfaB64uToBuf(o.user.id);
+    if (o.excludeCredentials) o.excludeCredentials = o.excludeCredentials.map(function (c) {
+        return { type: c.type, id: amfaB64uToBuf(c.id) };
+    });
+    return o;
+}
+function amfaPrepRequestOptions(o) {
+    o.challenge = amfaB64uToBuf(o.challenge);
+    if (o.allowCredentials) o.allowCredentials = o.allowCredentials.map(function (c) {
+        return { type: c.type, id: amfaB64uToBuf(c.id) };
+    });
+    return o;
+}
+function amfaCredToJson(cred, isCreate) {
+    var response = isCreate
+        ? { clientDataJSON: amfaBufToB64u(cred.response.clientDataJSON),
+            attestationObject: amfaBufToB64u(cred.response.attestationObject) }
+        : { clientDataJSON: amfaBufToB64u(cred.response.clientDataJSON),
+            authenticatorData: amfaBufToB64u(cred.response.authenticatorData),
+            signature: amfaBufToB64u(cred.response.signature) };
+    return { id: cred.id, type: cred.type, response: response };
+}
+function amfaWebauthnSupported() {
+    return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
+}
+// unraidCsrf is Unraid's own native token (var.ini csrf_token), required by webGUI's auto_prepend_file regardless of our own aegis_mfa_csrf token
+// sent as a header since our body is JSON, not a form field the native check would see in $_POST
+function amfaWebauthnRegister(csrf, unraidCsrf, label, onOk, onErr) {
+    fetch('/plugins/aegis.mfa/include/webauthn.enroll.begin.php', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Csrf-Token': unraidCsrf },
+        body: JSON.stringify({ csrf: csrf })
+    }).then(function (r) { return r.json(); }).then(function (begin) {
+        if (!begin.ok) throw new Error(begin.reason || 'begin_failed');
+        return navigator.credentials.create({ publicKey: amfaPrepCreateOptions(begin.options) });
+    }).then(function (cred) {
+        return fetch('/plugins/aegis.mfa/include/webauthn.enroll.finish.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Csrf-Token': unraidCsrf },
+            body: JSON.stringify({ csrf: csrf, label: label, credential: amfaCredToJson(cred, true) })
+        });
+    }).then(function (r) { return r.json(); }).then(function (fin) {
+        if (fin.ok) onOk(fin); else onErr(fin.reason || 'register_failed');
+    }).catch(function (e) { onErr((e && e.message) || 'error'); });
+}
+function amfaWebauthnLogin(csrf, unraidCsrf, onOk, onErr) {
+    fetch('/plugins/aegis.mfa/include/webauthn.login.begin.php', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Csrf-Token': unraidCsrf },
+        body: JSON.stringify({ csrf: csrf })
+    }).then(function (r) { return r.json(); }).then(function (begin) {
+        if (!begin.ok) throw new Error(begin.reason || 'begin_failed');
+        return navigator.credentials.get({ publicKey: amfaPrepRequestOptions(begin.options) });
+    }).then(function (cred) {
+        return fetch('/plugins/aegis.mfa/include/webauthn.login.finish.php', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Csrf-Token': unraidCsrf },
+            body: JSON.stringify({ csrf: csrf, credential: amfaCredToJson(cred, false) })
+        });
+    }).then(function (r) { return r.json(); }).then(function (fin) {
+        if (fin.ok) onOk(fin); else onErr(fin.reason || 'login_failed');
+    }).catch(function (e) { onErr((e && e.message) || 'error'); });
+}
+JS;
+}
+
 function aegis_mfa_shell_close(string $footHtml = ''): void {
     if ($footHtml !== '') {
         echo '        <div class="amfa-foot">' . $footHtml . "</div>\n";
