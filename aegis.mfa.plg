@@ -2,12 +2,12 @@
 <!DOCTYPE PLUGIN [
  <!ENTITY name      "aegis.mfa">
  <!ENTITY author    "Lazaros Chalkidis">
- <!ENTITY version   "2026.07.31">
+ <!ENTITY version   "2026.10.26">
  <!ENTITY branch    "main">
  <!ENTITY gitURL    "https://github.com/Lazaros-Chalkidis/unraid-aegis-mfa">
  <!ENTITY pluginURL "&gitURL;/releases/download/&version;/&name;-&version;.txz">
  <!ENTITY selfURL   "https://raw.githubusercontent.com/Lazaros-Chalkidis/unraid-aegis-mfa/&branch;/&name;.plg">
- <!ENTITY md5       "857b85af96df38930f52947b0393ca93">
+ <!ENTITY md5       "33b757903459f148d1c0a4f30767f958">
  <!ENTITY launch    "Settings/AegisMfa">
 ]>
 
@@ -27,6 +27,30 @@ Two-factor authentication for the Unraid webGUI. TOTP codes from any authenticat
 <![CDATA[
 
 # Aegis MFA
+
+## Version 2026.10.26
+
+### Added
+- Passkeys as a second factor: face/fingerprint/PIN or a hardware security key, alongside or instead of an authenticator app. Verified by a from-scratch WebAuthn implementation (ES256 only, no third-party library), consistent with the rest of the codebase
+- A new setup step lets you choose an authenticator app or a passkey; backup codes are generated and required either way, unchanged from before
+- Settings > Aegis MFA gets a Passkeys section: the HTTPS address a passkey is bound to, and per-account add/rename/remove, with a guard against removing an account's only remaining second factor
+- The login challenge offers "Use a passkey instead" whenever one is registered and the address matches
+- A "behind an HTTPS-terminating reverse proxy" toggle for the passkey address, for setups like Nginx Proxy Manager where Unraid itself only ever sees the plain-HTTP side of the connection
+
+### Security
+- A passkey's signature counter must increase each time it's used, rejecting a cloned authenticator
+- Passkey attempts count against the same per-IP lockout as TOTP codes
+
+### Fixed
+- The field for typing a code back under New codes showed as a full-width line instead of a small box, because Unraid's own input style took over
+
+Contributed by [Sebastian Oehm](https://github.com/SebastianOehm)
+
+---
+
+### Fixed
+- Failed today counted only the last five minutes and reset after a correct code, it now counts the whole day
+- Removing a passkey checks that another factor remains at the moment of removal, not from an earlier read
 
 ## Version 2026.07.31
 

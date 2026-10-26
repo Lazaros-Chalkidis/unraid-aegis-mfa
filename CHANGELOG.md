@@ -1,7 +1,7 @@
 
 # Aegis MFA
 
-## Unreleased
+## Version 2026.10.26
 
 ### Added
 - Passkeys as a second factor: face/fingerprint/PIN or a hardware security key, alongside or instead of an authenticator app. Verified by a from-scratch WebAuthn implementation (ES256 only, no third-party library), consistent with the rest of the codebase
@@ -18,6 +18,12 @@
 - The field for typing a code back under New codes showed as a full-width line instead of a small box, because Unraid's own input style took over
 
 Contributed by [Sebastian Oehm](https://github.com/SebastianOehm)
+
+---
+
+### Fixed
+- Failed today counted only the last five minutes and reset after a correct code, it now counts the whole day
+- Removing a passkey checks that another factor remains at the moment of removal, not from an earlier read
 
 ## Version 2026.07.31
 

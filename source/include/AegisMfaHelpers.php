@@ -484,9 +484,19 @@ function aegis_mfa_record_failure(string $ip, string $user, ?int $now = null): i
             if (count($d['failures']) > aegis_mfa_failures_max()) {
                 $d['failures'] = aegis_mfa_trim_map($d['failures'], 'last_at', aegis_mfa_failures_max());
             }
+            // the per-ip counters go on success and with the window, the card needs one that only the date resets
+            $day = date('Y-m-d', $now);
+            if (($d['day']['date'] ?? '') !== $day) $d['day'] = ['date' => $day, 'count' => 0];
+            $d['day']['count']++;
             return $d;
         });
     return $remaining;
+}
+
+function aegis_mfa_failures_today(?int $now = null): int {
+    $day = aegis_mfa_read_json(aegis_mfa_lockout_path())['day'] ?? null;
+    if (!is_array($day) || ($day['date'] ?? '') !== date('Y-m-d', $now ?? time())) return 0;
+    return max(0, (int)($day['count'] ?? 0));
 }
 
 function aegis_mfa_clear_failures(string $ip): bool {

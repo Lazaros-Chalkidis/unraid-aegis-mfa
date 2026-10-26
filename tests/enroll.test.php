@@ -286,7 +286,7 @@ aegis_mfa_config(true);
 aegis_mfa_write_json(aegis_mfa_lockout_path(), ['failures' => [
     '1.1.1.1' => ['count' => 3, 'last_at' => 2000, 'locked_until' => 9999999999],
     '2.2.2.2' => ['count' => 2, 'last_at' => 2000, 'locked_until' => 0],
-]]);
+], 'day' => ['date' => date('Y-m-d', 2000), 'count' => 5]]);
 
 $sum = aegis_mfa_admin_summary($fixture, 2000);
 t('summary enabled',        $sum['enabled'] === true);
@@ -313,6 +313,7 @@ t('pending without seen_at unseen', aegis_mfa_seen_webgui('media') === false);
 t('unseen still carries status', $byName['media']['status'] === 'locked');
 t('summary locked ips',     $sum['locked_ips'] === 1);
 t('summary failures today', $sum['failures_today'] === 5);
+t('summary failures today is dated', aegis_mfa_admin_summary($fixture, 2000 + 86400)['failures_today'] === 0);
 t('summary trust lan',      $sum['trust_lan'] === ['10.0.0.0/24']);
 t('summary grace days',     $sum['grace_days'] === 7);
 
@@ -406,6 +407,28 @@ t('rename passkey', aegis_mfa_rename_passkey('onlypasskey', 'pk-a', 'My phone') 
 $sec = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
 t('rename passkey persisted',   $sec['users']['onlypasskey']['passkeys'][0]['label'] === 'My phone');
 t('rename unknown passkey no-op', aegis_mfa_rename_passkey('onlypasskey', 'nope', 'X') === false);
+
+// the last-factor decision is taken on the file as it is under the lock, not on a copy read earlier
+aegis_mfa_write_json(AEGIS_MFA_FLASH_DIR . '/secrets.json', ['version' => 1, 'users' => [
+    'onlypasskey' => [
+        'status' => 'enrolled', 'backup_codes' => array_fill(0, 10, 'h'), 'backup_codes_used' => [0],
+        'passkeys' => [['id' => 'pk-a', 'public_key' => [], 'sign_count' => 0, 'label' => 'My phone']],
+    ],
+    'both' => [
+        'status' => 'enrolled', 'backup_codes' => array_fill(0, 10, 'h'), 'backup_codes_used' => [0],
+        'passkeys' => [['id' => 'pk-b', 'public_key' => [], 'sign_count' => 0, 'label' => 'Backup factor']],
+    ],
+    'gone' => ['status' => 'pending', 'grace_until' => 9999999999,
+        'passkeys' => [['id' => 'pk-g', 'public_key' => [], 'sign_count' => 0, 'label' => 'Stale']]],
+]]);
+$r = aegis_mfa_remove_passkey('both', 'pk-b');
+t('remove last factor refused once the totp is gone', ($r['reason'] ?? '') === 'last_factor');
+$r = aegis_mfa_remove_passkey('gone', 'pk-g');
+t('remove on a pending account refused', ($r['reason'] ?? '') === 'not_enrolled');
+t('rename on a pending account refused', aegis_mfa_rename_passkey('gone', 'pk-g', 'X') === false);
+$sec = aegis_mfa_read_json(AEGIS_MFA_FLASH_DIR . '/secrets.json');
+t('refusals left the file alone', $sec['users']['both']['passkeys'][0]['label'] === 'Backup factor'
+    && $sec['users']['gone']['passkeys'][0]['label'] === 'Stale');
 
 // adding TOTP to an already-enrolled, passkey-only account (AegisMfaAdmin.php), additive like aegis_mfa_add_passkey
 $_SESSION['unraid_user'] = 'onlypasskey';

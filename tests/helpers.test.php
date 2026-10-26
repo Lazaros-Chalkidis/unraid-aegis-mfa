@@ -263,6 +263,22 @@ t('prune drops stale',     !isset($d['failures']['192.0.2.1']));
 t('prune keeps fresh',     isset($d['failures']['192.0.2.2']));
 t('prune keeps locked',    isset($d['failures']['192.0.2.3']));
 
+// the day counter is what the Failed today card shows, so a success or a prune must not touch it
+aegis_mfa_write_json(aegis_mfa_lockout_path(), []);
+$day = 1_800_000_000;
+aegis_mfa_record_failure('10.0.0.3', 'root', $day);
+aegis_mfa_record_failure('10.0.0.3', 'root', $day + 20);
+t('day counts failures',       aegis_mfa_failures_today($day + 30) === 2);
+aegis_mfa_clear_failures('10.0.0.3');
+t('day survives a success',    aegis_mfa_failures_today($day + 40) === 2);
+aegis_mfa_record_failure('10.0.0.9', 'root', $day + 60);
+aegis_mfa_prune_lockouts($day + 60 + 500);
+t('day survives the prune',    aegis_mfa_failures_today($day + 60 + 501) === 3);
+t('day reads zero tomorrow',   aegis_mfa_failures_today($day + 86400) === 0);
+aegis_mfa_record_failure('10.0.0.9', 'root', $day + 86400);
+t('day restarts on a new date', aegis_mfa_failures_today($day + 86400) === 1);
+t('no day key reads zero',     (aegis_mfa_write_json(aegis_mfa_lockout_path(), ['failures' => []]) && aegis_mfa_failures_today($day) === 0));
+
 $fixture = function (string $db): array {
     if ($db === 'passwd') return [
         'root:x:0:0::/root:/bin/bash',

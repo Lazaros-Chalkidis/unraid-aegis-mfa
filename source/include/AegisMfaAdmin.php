@@ -256,34 +256,24 @@ function aegis_mfa_add_passkey(string $user, array $credentialResponse, string $
 
 // refuses to strip a user's last second factor (no TOTP, only this passkey) - starting over has its own path, reset_user
 function aegis_mfa_remove_passkey(string $user, string $credentialIdB64Url): array {
-    $sec = aegis_mfa_read_json(aegis_mfa_flash() . '/secrets.json');
-    $rec = $sec['users'][$user] ?? null;
-    if (!is_array($rec) || ($rec['status'] ?? '') !== 'enrolled') {
-        return ['ok' => false, 'reason' => 'not_enrolled'];
-    }
-    $pks = is_array($rec['passkeys'] ?? null) ? $rec['passkeys'] : [];
-    $hasTotp = !empty($rec['secret']);
-    $found = false;
-    foreach ($pks as $pk) {
-        if (is_array($pk) && ($pk['id'] ?? '') === $credentialIdB64Url) { $found = true; break; }
-    }
-    if (!$found) return ['ok' => false, 'reason' => 'not_found'];
-    if (!$hasTotp && count($pks) <= 1) return ['ok' => false, 'reason' => 'last_factor'];
-
-    $removed = false;
+    // decided under the same lock as the write, a reset in another tab must not slip between the two.
+    // a refusal returns null so the flash is not rewritten for nothing
+    $reason = 'not_found';
     aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
-        function ($s) use ($user, $credentialIdB64Url, &$removed) {
-            $list = $s['users'][$user]['passkeys'] ?? [];
-            if (!is_array($list)) return $s;
+        function ($s) use ($user, $credentialIdB64Url, &$reason) {
+            $rec = $s['users'][$user] ?? null;
+            if (!is_array($rec) || ($rec['status'] ?? '') !== 'enrolled') { $reason = 'not_enrolled'; return null; }
+            $list = is_array($rec['passkeys'] ?? null) ? $rec['passkeys'] : [];
             $new = array_values(array_filter($list, function ($pk) use ($credentialIdB64Url) {
                 return !(is_array($pk) && ($pk['id'] ?? '') === $credentialIdB64Url);
             }));
-            if (count($new) === count($list)) return $s;
+            if (count($new) === count($list)) { $reason = 'not_found'; return null; }
+            if (empty($rec['secret']) && count($new) === 0) { $reason = 'last_factor'; return null; }
             $s['users'][$user]['passkeys'] = $new;
-            $removed = true;
+            $reason = null;
             return $s;
         });
-    return ['ok' => $removed, 'reason' => $removed ? null : 'not_found'];
+    return ['ok' => $reason === null, 'reason' => $reason];
 }
 
 function aegis_mfa_rename_passkey(string $user, string $credentialIdB64Url, string $label): bool {
@@ -293,8 +283,9 @@ function aegis_mfa_rename_passkey(string $user, string $credentialIdB64Url, stri
     $wrote = false;
     aegis_mfa_update_json(aegis_mfa_flash() . '/secrets.json',
         function ($s) use ($user, $credentialIdB64Url, $label, &$wrote) {
+            if (($s['users'][$user]['status'] ?? '') !== 'enrolled') return null;
             $list = $s['users'][$user]['passkeys'] ?? null;
-            if (!is_array($list)) return $s;
+            if (!is_array($list)) return null;
             foreach ($list as $i => $pk) {
                 if (is_array($pk) && ($pk['id'] ?? '') === $credentialIdB64Url) {
                     $s['users'][$user]['passkeys'][$i]['label'] = $label;
@@ -302,7 +293,7 @@ function aegis_mfa_rename_passkey(string $user, string $credentialIdB64Url, stri
                     break;
                 }
             }
-            return $s;
+            return $wrote ? $s : null;
         });
     return $wrote;
 }
@@ -338,11 +329,11 @@ function aegis_mfa_admin_summary(?callable $getent = null, ?int $now = null): ar
         ];
     }
 
-    $lockedIps = 0; $failuresToday = 0;
+    $lockedIps = 0;
     foreach (($lock['failures'] ?? []) as $ip => $e) {
         if ((int)($e['locked_until'] ?? 0) > $now) $lockedIps++;
-        if ((int)($e['last_at'] ?? 0) > $now - 86400) $failuresToday += (int)($e['count'] ?? 0);
     }
+    $failuresToday = aegis_mfa_failures_today($now);
 
     return [
         'enabled'        => aegis_mfa_enabled(),

@@ -72,7 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
             $amfaNotice = count($r['rejected'])
                 ? 'Saved. Rejected invalid entries: ' . implode(', ', $r['rejected'])
                 : 'Trusted LAN saved.';
-            if (count($r['rejected'])) $amfaNoticeKind = 'warn';
+            if (count($r['rejected'])) $amfaNoticeKind = 'amfa-warn';
             break;
 
         case 'save_grace':
@@ -225,7 +225,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['amfa_action'])) {
                 if (($r['skipped'] ?? '') === 'no_root_in_list') {
                     $amfaNotice .= ' Add-only run: root was missing from the snapshot, '
                                  . 'so nothing was removed.';
-                    $amfaNoticeKind = 'warn';
+                    $amfaNoticeKind = 'amfa-warn';
                 }
             }
             break;
@@ -314,7 +314,7 @@ The boot service retries automatically; check the syslog for aegis-mfa entries.<
 <?php endif; ?>
 
 <?php if ($amfaSum['enabled'] && $amfaSum['client_trusted']): ?>
-<div class="amfa-note warn">Your address <code><?= $amfaEsc($amfaSum['client_ip']) ?></code> is on the
+<div class="amfa-note amfa-warn">Your address <code><?= $amfaEsc($amfaSum['client_ip']) ?></code> is on the
 trusted list, so this browser is never asked for a code. Remove it under Trusted LAN to be prompted
 like everyone else.</div>
 <?php endif; ?>
@@ -403,7 +403,7 @@ if ($amfaTotpAdd !== null):
 
 <div class="amfa-cards">
   <div class="amfa-cardx"><p>Enrolled</p><b><?= (int)$amfaSum['enrolled'] ?> <span class="amfa-frac">/ <?= (int)$amfaSum['total_users'] ?></span></b></div>
-  <div class="amfa-cardx"><p>Locked IPs</p><b class="<?= $amfaSum['locked_ips'] > 0 ? 'warn' : '' ?>"><?= (int)$amfaSum['locked_ips'] ?></b></div>
+  <div class="amfa-cardx"><p>Locked IPs</p><b class="<?= $amfaSum['locked_ips'] > 0 ? 'amfa-warn' : '' ?>"><?= (int)$amfaSum['locked_ips'] ?></b></div>
   <div class="amfa-cardx"><p>Failed today</p><b><?= (int)$amfaSum['failures_today'] ?></b></div>
   <div class="amfa-cardx"><p>Status</p><b><?= $amfaSum['enabled'] ? ($amfaSum['dry_run'] ? 'Dry-run' : 'Protecting') : 'Off' ?></b></div>
 </div>
@@ -439,7 +439,7 @@ if ($amfaTotpAdd !== null):
               $u['status'] === 'none' ? 'None - Not set up for MFA yet' : $amfaEsc(ucfirst($u['status']))
             ?></span>
             <?php if ($u['status'] !== 'none'): ?>
-            <span<?= in_array($u['status'], ['locked'], true) ? ' class="warn"' : '' ?>>
+            <span<?= in_array($u['status'], ['locked'], true) ? ' class="amfa-warn"' : '' ?>>
             <?php if ($u['status'] === 'enrolled'): ?>
               <?= (int)$u['backup_remaining'] ?> backup codes left
             <?php elseif ($u['status'] === 'pending' && $u['grace_until']): ?>
@@ -480,7 +480,6 @@ if ($amfaTotpAdd !== null):
             </button>
           <?php endif; ?>
           </span>
-        </div>
         <?php if ($u['seen'] && $u['status'] === 'enrolled'): ?>
         <div class="amfa-factors-row">
           <?php if ($u['has_totp']): ?>
@@ -514,6 +513,7 @@ if ($amfaTotpAdd !== null):
           <?php endif; ?>
         </div>
         <?php endif; ?>
+        </div>
       <?php endforeach; ?>
       </div>
       <?php if ($amfaSum['webauthn_configured'] && !$amfaSum['webauthn_available']): ?>
@@ -660,7 +660,7 @@ if ($amfaTotpAdd !== null):
           <td><?= $amfaEsc(date('Y-m-d H:i', $h['locked_at'])) ?></td>
           <td>
             <?php if ($h['remaining'] > 0): ?>
-            <span class="warn"><?= (int)ceil($h['remaining'] / 60) ?> min</span>
+            <span class="amfa-lk-left"><?= (int)ceil($h['remaining'] / 60) ?> min</span>
             <?php else: ?>
             <span class="amfa-lk-done">expired</span>
             <?php endif; ?>
@@ -765,6 +765,16 @@ if ($amfaTotpAdd !== null):
         </div>
         <div class="amfa-credits-name">Lazaros Chalkidis</div>
         <div class="amfa-credits-role">Author</div>
+        <div class="amfa-credits-contrib">
+          <div class="amfa-credits-contrib-av">
+            <img src="/plugins/aegis.mfa/images/sebastian-oehm.png" alt="Sebastian Oehm" class="amfa-credits-avatar">
+          </div>
+          <div class="amfa-credits-name">
+            <a href="https://github.com/SebastianOehm" target="_blank" rel="noopener">Sebastian Oehm</a>
+          </div>
+          <div class="amfa-credits-role">Contributor</div>
+          <div class="amfa-credits-contrib-what">Passkeys</div>
+        </div>
       </div>
 
       <div class="amfa-credits-right">

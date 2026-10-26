@@ -1,6 +1,6 @@
 # Aegis MFA for Unraid
 
-Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app. 
+Two-factor authentication for the Unraid webGUI. After your password, enter a 6-digit code from any authenticator app, or confirm with a passkey. 
 Backup codes, a trusted LAN bypass, and lockout protection. It protects root, the only account the Unraid webGUI accepts.
 
 <p align="center">
@@ -130,7 +130,7 @@ rm -rf /boot/config/plugins/aegis.mfa
 ## First run
 
 1. Open Settings > Aegis MFA and click **Enable MFA**. This starts a 24-hour dry-run: codes are checked and failures are logged, but nothing is blocked yet
-2. Log out and back in. You will be asked to set up 2FA. Scan the QR with your app, confirm a code, and save your backup codes
+2. Log out and back in. You will be asked to set up 2FA. Scan the QR with your app, confirm a code, and save your backup codes. With a passkey address configured, the wizard first asks whether you want an authenticator app or a passkey
 3. Confirm a normal login works with a code from your app
 4. Back in Settings, click **Enforce now**. From here on a missing or wrong code stops the login
 
@@ -144,7 +144,7 @@ The dry-run exists so that a clock problem, a mistyped secret, or an unexpected 
 - Enforce now: End the 24-hour dry-run early, once you have confirmed it works
 - Trusted LAN: Networks that skip the code prompt, one CIDR or IP per line, IPv4 and IPv6. The password is still required. When the address you are on is on the list, the page says so at the top, since an exempt browser otherwise looks identical to a protected one
 - Grace period: How many days root has to enrol after the first sync before the setup screen becomes mandatory. Two by default, and worth keeping short: while the window is open, anyone with the password can reach the wizard, so enrol as soon as you turn MFA on
-- Passkeys: The address (e.g. `https://tower.mydomain.com`) passkeys are bound to, blank by default. Set it to whichever address you use over HTTPS and the setup wizard offers "Passkey" as a method alongside the authenticator app; open the settings page from that same address to add, rename, or remove passkeys per account. Other addresses keep working with the code and backup codes, just not a passkey
+- Passkeys: The address (e.g. `https://tower.mydomain.com`) passkeys are bound to, blank by default. Set it to whichever address you use over HTTPS and the setup wizard offers "Passkey" as a method alongside the authenticator app; open the settings page from that same address to add, rename, or remove passkeys per account. Other addresses keep working with the code and backup codes, just not a passkey. If something in front of Unraid terminates HTTPS and forwards plain HTTP to it (Nginx Proxy Manager, Traefik, a Cloudflare Tunnel), tick "Behind an HTTPS-terminating reverse proxy" so the passkey buttons appear; the passkey check itself still verifies the real address your browser reports
 - Lockout history: Blocked addresses, with Unlock to release one now, Delete for a spent entry and Clear for every expired one. The Keep history switch controls whether they survive a reboot, nothing else
 - Account row: New backup codes, a 2FA reset, or a one-time setup link for when the authenticator is lost. Accounts that cannot sign in to the webGUI have none of these
 - Sync accounts: Reconcile the enrolment list against Unraid's own account list. Runs on its own at boot and every ten minutes
@@ -195,7 +195,7 @@ The four passkey endpoints (`webauthn.*.php`) are the only places in this plugin
 ### Requirements
 - Unraid 7.3.1 or later (for testing)
 - PHP CLI and Bash (for the build script and the test suite)
-- Python 3 with OpenCV, optional, for the QR decode cross-check
+- Python 3 with zxing-cpp or OpenCV, optional, for the QR decode cross-check
 - On Windows specifically: `webauthn.test.php` generates a real EC keypair via `openssl_pkey_new()`, which needs a working `openssl.cnf`. A Windows PHP build (e.g. from scoop) may not find one by default (`openssl_pkey_new()` silently returns `false`) - point `OPENSSL_CONF` at the one PHP ships (`<php install dir>\extras\ssl\openssl.cnf`) before running the tests. Linux PHP, including Unraid's, finds its system one automatically and needs nothing extra
 
 ### Build
@@ -212,7 +212,7 @@ The build runs the test suite first and refuses to package if anything fails. A 
 ./tests/run-all.sh
 ```
 
-Hundreds of checks across nine suites, none of which need an Unraid box: TOTP against the RFC 6238 and RFC 4226 vectors, WebAuthn (CBOR decoding against RFC 8949 vectors, COSE/ES256 signature verification against a real generated keypair, full registration and assertion ceremonies, sign-count replay rejection), a static require-completeness check that parses every source file's actual `require_once` chain and flags any `aegis_*()` call nothing in that chain defines (the exact bug class a function-level unit test can't see, since the test file supplies its own requires rather than the shipped file's), the helpers (including a real two-process `flock` contention test), the gate's decision matrix and every fail-open path, the installer against throwaway copies of the two Unraid files (patch, rollback, atomicity, simulated OS updates), the enrolment state machine for both methods, the QR encoder, whose output is decoded back with OpenCV to prove it actually scans, and the pure-bash recovery script against real patched fixtures.
+Hundreds of checks across nine suites, none of which need an Unraid box: TOTP against the RFC 6238 and RFC 4226 vectors, WebAuthn (CBOR decoding against RFC 8949 vectors, COSE/ES256 signature verification against a real generated keypair, full registration and assertion ceremonies, sign-count replay rejection), a static require-completeness check that parses every source file's actual `require_once` chain and flags any `aegis_*()` call nothing in that chain defines (the exact bug class a function-level unit test can't see, since the test file supplies its own requires rather than the shipped file's), the helpers (including a real two-process `flock` contention test), the gate's decision matrix and every fail-open path, the installer against throwaway copies of the two Unraid files (patch, rollback, atomicity, simulated OS updates), the enrolment state machine for both methods, the QR encoder, whose output is decoded back with zxing-cpp (OpenCV as the fallback) to prove it actually scans, and the pure-bash recovery script against real patched fixtures.
 
 ### Project structure
 
@@ -238,7 +238,9 @@ unraid-aegis-mfa/
 │   │   └── aegis-mfa-recover.sh  pure-bash recovery, copied to the boot device on install
 │   ├── event/
 │   │   └── started               boot hook, re-applies the patches
-│   ├── images/                   avatar.png only, the plugin mark is inline SVG
+│   ├── images/                   the author and contributor avatars, the plugin mark is inline SVG
+│   ├── js/
+│   │   └── aegis-mfa-header.js   draws the header icon as line art
 │   ├── AegisMfa.page             Settings > Aegis MFA
 │   ├── AegisMfaIcon.page         defines the icon class for the Plugins page
 │   ├── challenge.view.php        the code prompt
